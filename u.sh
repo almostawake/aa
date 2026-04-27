@@ -95,6 +95,15 @@ for bak in "$HOME"/.zshrc.*.bak; do
   say "  removed $bak"
 done
 
+# gh stores its OAuth token in the macOS keychain (service "gh:github.com").
+# Loop in case multiple accounts have been logged in; each call deletes one
+# entry, exits non-zero when none remain. Silent — no password prompt.
+gh_kc_removed=0
+while security delete-generic-password -s "gh:github.com" >/dev/null 2>&1; do
+  gh_kc_removed=$((gh_kc_removed + 1))
+done
+[ "$gh_kc_removed" -gt 0 ] && say "  removed $gh_kc_removed gh keychain entr$([ $gh_kc_removed -eq 1 ] && echo y || echo ies)"
+
 # Restore Terminal.app plist if the installer backed it up
 TBAK="$HOME/Library/Preferences/com.apple.Terminal.plist.bak"
 if [ -f "$TBAK" ]; then
