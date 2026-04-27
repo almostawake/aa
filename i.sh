@@ -291,9 +291,58 @@ for i in "${!FNS[@]}"; do
   fi
 done
 
+# ==========================================================================
+# Auth + clone (in this same subshell — PATH/zshrc are if-install.sh's job)
+# ==========================================================================
+
+# Make our just-installed binaries usable for the rest of this run.
+export PATH="$IF_HOME/gh/bin:$IF_HOME/git/bin:$PATH"
+# git on Apple Silicon is a Homebrew bottle with @@HOMEBREW_PREFIX@@ baked
+# in; we ship its libs alongside in $IF_HOME/git/lib and resolve via
+# DYLD_FALLBACK_LIBRARY_PATH for any git invocation in this script.
+[ -d "$IF_HOME/git/lib" ] && export DYLD_FALLBACK_LIBRARY_PATH="$IF_HOME/git/lib"
+
+echo ""
+
+# --- gh auth ---
+if gh auth status >/dev/null 2>&1; then
+  printf '%b  github authenticated\n' "${C_GRN}✓${C_RST}"
+else
+  printf '%b  signing in to github (your browser will open)\n' "${C_GRAY}⋯${C_RST}"
+  echo ""
+  if ! gh auth login </dev/tty; then
+    echo ""
+    die "github sign-in didn't complete"
+  fi
+  echo ""
+  printf '%b  github authenticated\n' "${C_GRN}✓${C_RST}"
+fi
+
+# --- git credential helper ---
+# Idempotent — registers gh as the helper for github.com so plain `git`
+# commands (e.g., `git pull`) authenticate via gh's stored token.
+gh auth setup-git >> "$INSTALL_LOG" 2>&1
+
+# --- clone the if repo ---
+if [ -d "$IF_HOME/staging/.git" ]; then
+  printf '%b  if repo present at ~/.if/staging\n' "${C_GRN}✓${C_RST}"
+else
+  printf '%b  cloning almostawake/if\n' "${C_GRAY}⋯${C_RST}"
+  if ! gh repo clone almostawake/if "$IF_HOME/staging" >> "$INSTALL_LOG" 2>&1; then
+    printf '\033[1A\r\033[K'
+    printf '%b  couldn'\''t clone almostawake/if\n' "${C_RED}✗${C_RST}"
+    echo ""
+    echo "you may not have been added as a collaborator yet."
+    echo "request access at https://almostawake.com — we'll email you when approved."
+    exit 1
+  fi
+  printf '\033[1A\r\033[K'
+  printf '%b  if repo cloned to ~/.if/staging\n' "${C_GRN}✓${C_RST}"
+fi
+
 # Clear EXIT trap on success — no need to dump the log.
 trap - EXIT
 
 echo ""
-echo "git + gh in place. (auth + clone come next.)"
+echo "next: bash ~/.if/staging/scripts/if-install.sh"
 echo ""
