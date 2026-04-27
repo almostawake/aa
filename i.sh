@@ -117,7 +117,36 @@ _install_git_bottle() {
   cp "$stage/pcre2/$pcre2_ver/lib/libpcre2-8.0.dylib" "$IF_HOME/git/lib/"
   cp "$stage/gettext/$gettext_ver/lib/libintl.8.dylib" "$IF_HOME/git/lib/"
   rm -rf "$stage"
-  DYLD_FALLBACK_LIBRARY_PATH="$IF_HOME/git/lib" "$IF_HOME/git/bin/git" --version >/dev/null
+  # The git bottle dlopens libintl.8.dylib via @@HOMEBREW_PREFIX@@ paths
+  # that don't exist on this machine; we redirect to ~/.if/git/lib via
+  # DYLD_FALLBACK_LIBRARY_PATH. But that env var is stripped by dyld when
+  # loading any hardened-runtime binary (gh, codesign-restricted shells).
+  # So when gh runs git as a subprocess, DYLD has already been wiped from
+  # gh's env and git fails with "Symbol not found: _libintl_bind_*".
+  # Fix: replace bin/git with a /bin/bash wrapper that exports DYLD and
+  # exec's the real binary. The wrapper's exec→git is unhardened, so the
+  # var survives. Wrap entry points in bin/ — internal helpers in
+  # libexec/git-core/ are spawned by git itself and inherit env normally.
+  mv "$IF_HOME/git/bin/git" "$IF_HOME/git/bin/git.real"
+  cat > "$IF_HOME/git/bin/git" <<'WRAP'
+#!/bin/bash
+# DYLD_FALLBACK_LIBRARY_PATH: bottle dlopens libintl.8.dylib via an
+# unsubstituted @@HOMEBREW_PREFIX@@ path that doesn't exist; we ship it
+# at ~/.if/git/lib. dyld strips DYLD_* env vars when loading hardened
+# binaries (gh, signed shells), so we re-set it here in the wrapper —
+# the real git is unhardened, so the var survives the exec.
+# GIT_EXEC_PATH: the bottle's compiled-in libexec path is also an
+# unsubstituted placeholder. Without this, `git clone https://...` etc.
+# fail because git can't find git-remote-https in libexec/git-core/.
+export DYLD_FALLBACK_LIBRARY_PATH="$HOME/.if/git/lib${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
+export GIT_EXEC_PATH="$HOME/.if/git/libexec/git-core"
+exec "$HOME/.if/git/bin/git.real" "$@"
+WRAP
+  chmod +x "$IF_HOME/git/bin/git"
+  # Smoke test BOTH a builtin (--version, exercises libintl) and a
+  # libexec-dependent path (-c help.format=man help -i, no — too noisy).
+  # Just --version is enough for libintl; libexec is covered structurally.
+  "$IF_HOME/git/bin/git" --version >/dev/null
 }
 
 _install_git_xcode() {
@@ -164,7 +193,12 @@ _install_gh() {
 # time. Check the install location directly first, fall back to PATH.
 have_git=false
 if [ -x "$IF_HOME/git/bin/git" ]; then
-  have_git=true
+  # Wrapper presence (git.real) is our sentinel for a healthy install.
+  # An older bottle-only install without the wrapper is broken under
+  # gh/hardened callers — re-install to lay down the wrapper.
+  if [ -x "$IF_HOME/git/bin/git.real" ]; then
+    have_git=true
+  fi
 else
   git_path="$(command -v git 2>/dev/null || true)"
   if [ -n "$git_path" ]; then
@@ -306,7 +340,22 @@ echo ""
 if gh auth status >/dev/null 2>&1; then
   printf '%b  github authenticated\n' "${C_GRN}✓${C_RST}"
 else
-  printf '%b  signing in to github (your browser will open)\n' "${C_GRAY}⋯${C_RST}"
+  cat <<SIGNPOST
+
+${C_BLD}Next: signing into github${C_RST}
+  - github will prompt for:
+    - where do you use github       ${C_GRAY}<- select github.com${C_RST}
+    - preferred protocol            ${C_GRAY}<- select https${C_RST}
+    - login method                  ${C_GRAY}<- select login with browser${C_RST}
+  - copy the code github gives you in the terminal
+  - then hit enter to trigger the browser
+  - paste the code when prompted
+  - choose authorize github
+  - return here when it's done
+
+  ${C_GRAY}press enter when you're ready${C_RST}
+SIGNPOST
+  read -r _ </dev/tty || true
   echo ""
   if ! gh auth login </dev/tty; then
     echo ""
