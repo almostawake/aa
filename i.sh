@@ -104,49 +104,67 @@ _install_git() {
 _install_git_bottle() {
   local tag="$1"
   local stage; stage=$(mktemp -d)
-  fetch_bottle git     "$tag" "$stage" || { rm -rf "$stage"; return 1; }
-  fetch_bottle pcre2   "$tag" "$stage" || { rm -rf "$stage"; return 1; }
-  fetch_bottle gettext "$tag" "$stage" || { rm -rf "$stage"; return 1; }
-  local git_ver pcre2_ver gettext_ver
-  git_ver=$(ls "$stage/git" | head -1)
-  pcre2_ver=$(ls "$stage/pcre2" | head -1)
+  # We extract the git bottle raw (no Homebrew, no relocation step), so
+  # all the libs git was compiled to load — pcre2, gettext, curl,
+  # openssl — have to be shipped alongside or git fails at runtime.
+  # libcurl in particular: the Homebrew bottle's git-remote-http expects
+  # symbols (e.g. _curl_global_trace) that the macOS system libcurl
+  # doesn't export, so we MUST ship Homebrew's libcurl, which in turn
+  # drags in libssl + libcrypto from openssl@3.
+  fetch_bottle git       "$tag" "$stage" || { rm -rf "$stage"; return 1; }
+  fetch_bottle pcre2     "$tag" "$stage" || { rm -rf "$stage"; return 1; }
+  fetch_bottle gettext   "$tag" "$stage" || { rm -rf "$stage"; return 1; }
+  fetch_bottle curl      "$tag" "$stage" || { rm -rf "$stage"; return 1; }
+  fetch_bottle openssl@3 "$tag" "$stage" || { rm -rf "$stage"; return 1; }
+  local git_ver pcre2_ver gettext_ver curl_ver openssl_ver
+  git_ver=$(ls "$stage/git"       | head -1)
+  pcre2_ver=$(ls "$stage/pcre2"   | head -1)
   gettext_ver=$(ls "$stage/gettext" | head -1)
+  curl_ver=$(ls "$stage/curl"     | head -1)
+  openssl_ver=$(ls "$stage/openssl@3" | head -1)
   rm -rf "$IF_HOME/git"
   mkdir -p "$IF_HOME/git/lib"
   cp -R "$stage/git/$git_ver/." "$IF_HOME/git/"
-  cp "$stage/pcre2/$pcre2_ver/lib/libpcre2-8.0.dylib" "$IF_HOME/git/lib/"
-  cp "$stage/gettext/$gettext_ver/lib/libintl.8.dylib" "$IF_HOME/git/lib/"
+  cp "$stage/pcre2/$pcre2_ver/lib/libpcre2-8.0.dylib"     "$IF_HOME/git/lib/"
+  cp "$stage/gettext/$gettext_ver/lib/libintl.8.dylib"    "$IF_HOME/git/lib/"
+  cp "$stage/curl/$curl_ver/lib/libcurl.4.dylib"          "$IF_HOME/git/lib/"
+  cp "$stage/openssl@3/$openssl_ver/lib/libssl.3.dylib"   "$IF_HOME/git/lib/"
+  cp "$stage/openssl@3/$openssl_ver/lib/libcrypto.3.dylib" "$IF_HOME/git/lib/"
   rm -rf "$stage"
-  # The git bottle dlopens libintl.8.dylib via @@HOMEBREW_PREFIX@@ paths
-  # that don't exist on this machine; we redirect to ~/.if/git/lib via
-  # DYLD_FALLBACK_LIBRARY_PATH. But that env var is stripped by dyld when
-  # loading any hardened-runtime binary (gh, codesign-restricted shells).
-  # So when gh runs git as a subprocess, DYLD has already been wiped from
-  # gh's env and git fails with "Symbol not found: _libintl_bind_*".
-  # Fix: replace bin/git with a /bin/bash wrapper that exports DYLD and
-  # exec's the real binary. The wrapper's exec→git is unhardened, so the
-  # var survives. Wrap entry points in bin/ — internal helpers in
-  # libexec/git-core/ are spawned by git itself and inherit env normally.
+  # Wrap bin/git so the right env is in scope when the real binary
+  # runs. Without the wrapper, gh-spawned git inherits a stripped
+  # environment (dyld drops DYLD_* vars when loading any hardened
+  # binary — gh, codesigned shells) and clone/fetch fail.
+  #
+  # DYLD_LIBRARY_PATH (not _FALLBACK_): we need to OVERRIDE, not just
+  # supplement. The bottle's git-remote-http has /usr/lib/libcurl.4.dylib
+  # as an embedded LC_LOAD_DYLIB; FALLBACK only fires when dyld fails
+  # to resolve the embedded path, but /usr/lib/libcurl.4.dylib does
+  # resolve — it just lacks the symbols git was built against. Plain
+  # DYLD_LIBRARY_PATH wins by leaf-name lookup before the embedded
+  # path is even tried, so our shipped libcurl is used instead.
+  #
+  # GIT_EXEC_PATH: bottle's compiled-in libexec path is also an
+  # unsubstituted @@HOMEBREW_PREFIX@@ placeholder. Without this,
+  # `git clone https://...` fails to find git-remote-https.
   mv "$IF_HOME/git/bin/git" "$IF_HOME/git/bin/git.real"
   cat > "$IF_HOME/git/bin/git" <<'WRAP'
 #!/bin/bash
-# DYLD_FALLBACK_LIBRARY_PATH: bottle dlopens libintl.8.dylib via an
-# unsubstituted @@HOMEBREW_PREFIX@@ path that doesn't exist; we ship it
-# at ~/.if/git/lib. dyld strips DYLD_* env vars when loading hardened
-# binaries (gh, signed shells), so we re-set it here in the wrapper —
-# the real git is unhardened, so the var survives the exec.
-# GIT_EXEC_PATH: the bottle's compiled-in libexec path is also an
-# unsubstituted placeholder. Without this, `git clone https://...` etc.
-# fail because git can't find git-remote-https in libexec/git-core/.
-export DYLD_FALLBACK_LIBRARY_PATH="$HOME/.if/git/lib${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
+export DYLD_LIBRARY_PATH="$HOME/.if/git/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
 export GIT_EXEC_PATH="$HOME/.if/git/libexec/git-core"
 exec "$HOME/.if/git/bin/git.real" "$@"
 WRAP
   chmod +x "$IF_HOME/git/bin/git"
-  # Smoke test BOTH a builtin (--version, exercises libintl) and a
-  # libexec-dependent path (-c help.format=man help -i, no — too noisy).
-  # Just --version is enough for libintl; libexec is covered structurally.
+  # Smoke tests:
+  # 1. --version: exercises libintl. Cheap.
+  # 2. ls-remote https: exercises git-remote-https → libcurl → libssl.
+  #    This is the failure mode that bit us — bottle's git-remote-http
+  #    expects libcurl symbols (e.g. _curl_global_trace) that may not
+  #    be present on the user's macOS. If this fails, return non-zero
+  #    so _install_git falls through to the Xcode CLT path (Apple's
+  #    git is built against the user's real system libs — always works).
   "$IF_HOME/git/bin/git" --version >/dev/null
+  "$IF_HOME/git/bin/git" ls-remote https://github.com/octocat/Hello-World.git HEAD >/dev/null 2>&1
 }
 
 _install_git_xcode() {
@@ -376,12 +394,23 @@ if [ -d "$IF_HOME/staging/.git" ]; then
   printf '%b  if repo present at ~/.if/staging\n' "${C_GRN}✓${C_RST}"
 else
   printf '%b  cloning almostawake/if\n' "${C_GRAY}⋯${C_RST}"
-  if ! gh repo clone almostawake/if "$IF_HOME/staging" >> "$INSTALL_LOG" 2>&1; then
+  # Capture stderr so we can pattern-match permission failures vs other
+  # errors. gh prints "Could not resolve" / "not found" / "404" for
+  # permission/repo-existence problems, vs git-side errors for dylib /
+  # network / etc. failures.
+  clone_err=$(gh repo clone almostawake/if "$IF_HOME/staging" 2>&1 | tee -a "$INSTALL_LOG")
+  clone_rc=${PIPESTATUS[0]}
+  if [ "$clone_rc" -ne 0 ]; then
     printf '\033[1A\r\033[K'
     printf '%b  couldn'\''t clone almostawake/if\n' "${C_RED}✗${C_RST}"
     echo ""
-    echo "you may not have been added as a collaborator yet."
-    echo "request access at https://almostawake.com — we'll email you when approved."
+    if printf '%s' "$clone_err" | grep -qiE '404|not found|could not resolve host|repository not found|gh repo: name argument required'; then
+      echo "looks like a permissions issue — you may not have been added as"
+      echo "a collaborator yet. request access at https://almostawake.com."
+    else
+      echo "clone failed for a non-permissions reason — see error above and"
+      echo "the log tail below."
+    fi
     exit 1
   fi
   printf '\033[1A\r\033[K'
