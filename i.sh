@@ -343,6 +343,7 @@ else
   cat <<SIGNPOST
 
 ${C_BLD}Next: signing into github${C_RST}
+
   - github will prompt for:
     - where do you use github       ${C_GRAY}<- select github.com${C_RST}
     - preferred protocol            ${C_GRAY}<- select https${C_RST}
