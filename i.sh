@@ -259,37 +259,35 @@ for i in $(seq 0 $((N - 1))); do
 done
 echo ""
 
-# Short-circuit if nothing to do.
-if [ "$N_TODO" -eq 0 ]; then
-  trap - EXIT
-  exit 0
-fi
-
-if ! prompt_yn "Ready to get started?" "Y"; then
-  say "no changes made. goodbye."
-  trap - EXIT
-  exit 0
-fi
-
-# Wipe the prompt + blank line so cursor returns to "after last row".
-printf '\033[2A\033[J'
-
-# Run each pending install with in-place row updates.
-for i in "${!FNS[@]}"; do
-  if [ "${INSTALLED[$i]}" = "true" ]; then
-    continue
+# Only prompt + run the install loop if there's actually something to do.
+# If everything's already installed we fall straight through to auth+clone.
+if [ "$N_TODO" -gt 0 ]; then
+  if ! prompt_yn "Ready to get started?" "Y"; then
+    say "no changes made. goodbye."
+    trap - EXIT
+    exit 0
   fi
-  update_row "$i" "running"
-  rc=0
-  "${FNS[$i]}" >> "$INSTALL_LOG" 2>&1 || rc=$?
-  if [ "$rc" -eq 0 ]; then
-    update_row "$i" "done"
-  else
-    update_row "$i" "failed"
-    echo ""
-    die "install of ${PENDING[$i]} failed (rc=$rc) — see $INSTALL_LOG"
-  fi
-done
+
+  # Wipe the prompt + blank line so cursor returns to "after last row".
+  printf '\033[2A\033[J'
+
+  # Run each pending install with in-place row updates.
+  for i in "${!FNS[@]}"; do
+    if [ "${INSTALLED[$i]}" = "true" ]; then
+      continue
+    fi
+    update_row "$i" "running"
+    rc=0
+    "${FNS[$i]}" >> "$INSTALL_LOG" 2>&1 || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      update_row "$i" "done"
+    else
+      update_row "$i" "failed"
+      echo ""
+      die "install of ${PENDING[$i]} failed (rc=$rc) — see $INSTALL_LOG"
+    fi
+  done
+fi
 
 # ==========================================================================
 # Auth + clone (in this same subshell — PATH/zshrc are if-install.sh's job)
