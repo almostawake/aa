@@ -13,12 +13,23 @@ set -e
 # ==========================================================================
 
 if [ -t 1 ]; then
-  C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_GRAY=$'\033[90m'; C_RST=$'\033[0m'
+  C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_GRAY=$'\033[90m'
+  C_BLD=$'\033[1m'; C_RST=$'\033[0m'
 else
-  C_RED=""; C_GRN=""; C_GRAY=""; C_RST=""
+  C_RED=""; C_GRN=""; C_GRAY=""; C_BLD=""; C_RST=""
 fi
 
 die() { printf "${C_RED}error:${C_RST} %s\n" "$*" >&2; exit 1; }
+say() { printf '%s\n' "$*"; }
+
+prompt_yn() {
+  local q="$1" def="$2" hint answer
+  if [ "$def" = "Y" ]; then hint="[Y/n]"; else hint="[y/N]"; fi
+  printf '%s %s ' "$q" "$hint"
+  read -r answer </dev/tty || answer=""
+  [ -z "$answer" ] && answer="$def"
+  case "$answer" in [Yy]*) return 0 ;; *) return 1 ;; esac
+}
 
 detect_os_arch() {
   case "$(uname -s)" in
@@ -106,15 +117,11 @@ _install_git_bottle() {
   cp "$stage/pcre2/$pcre2_ver/lib/libpcre2-8.0.dylib" "$IF_HOME/git/lib/"
   cp "$stage/gettext/$gettext_ver/lib/libintl.8.dylib" "$IF_HOME/git/lib/"
   rm -rf "$stage"
-  # Verify by running it once; set DYLD_FALLBACK_LIBRARY_PATH so the
-  # baked-in @@HOMEBREW_PREFIX@@ paths resolve.
   DYLD_FALLBACK_LIBRARY_PATH="$IF_HOME/git/lib" "$IF_HOME/git/bin/git" --version >/dev/null
 }
 
 _install_git_xcode() {
   if xcode-select -p >/dev/null 2>&1; then return 0; fi
-  # GUI dialog triggers here. User must click, wait ~10min.
-  # We go silent after triggering and poll until CLT appears.
   xcode-select --install 2>/dev/null || true
   while ! xcode-select -p >/dev/null 2>&1; do sleep 10; done
 }
@@ -149,7 +156,7 @@ _install_gh() {
 }
 
 # ==========================================================================
-# Detection — what's already installed
+# Detection
 # ==========================================================================
 
 have_git=false
@@ -169,7 +176,57 @@ have_gh=false
 command -v gh >/dev/null 2>&1 && have_gh=true
 
 # ==========================================================================
-# Banner + run
+# Build the install list — same shape as if-new.sh's PROV_* arrays
+# ==========================================================================
+
+PENDING=()
+RUNNING=()
+DONE=()
+FNS=()
+
+[ "$have_git" = "true" ] || {
+  PENDING+=("install git")
+  RUNNING+=("installing git")
+  DONE+=("git installed")
+  FNS+=("_install_git")
+}
+[ "$have_gh" = "true" ] || {
+  PENDING+=("install gh")
+  RUNNING+=("installing gh")
+  DONE+=("gh installed")
+  FNS+=("_install_gh")
+}
+N=${#FNS[@]}
+
+# ==========================================================================
+# Row UI (same shape as if-new.sh draw_prov_row / update_prov_row)
+# ==========================================================================
+
+draw_row() {
+  local i="$1" state="$2"
+  local icon color label
+  case "$state" in
+    done)    icon="${C_GRN}✓${C_RST}";  color="$C_GRN";  label="${DONE[$i]}"    ;;
+    running) icon="${C_GRAY}⋯${C_RST}"; color="$C_GRAY"; label="${RUNNING[$i]}" ;;
+    pending) icon="${C_GRAY}○${C_RST}"; color="$C_GRAY"; label="${PENDING[$i]}" ;;
+    failed)  icon="${C_RED}✗${C_RST}";  color="$C_RED";  label="${RUNNING[$i]}" ;;
+  esac
+  printf '  %b  %b%s%b\n' "$icon" "$color" "$label" "$C_RST"
+}
+
+update_row() {
+  local i="$1" state="$2"
+  local up=$((N - i))
+  printf '\033[%dA\r\033[K' "$up"
+  draw_row "$i" "$state"
+  local down=$((N - i - 1))
+  if [ "$down" -gt 0 ]; then
+    printf '\033[%dB\r' "$down"
+  fi
+}
+
+# ==========================================================================
+# Banner
 # ==========================================================================
 
 cat <<BANNER
@@ -180,25 +237,45 @@ cat <<BANNER
 
 BANNER
 
-mkdir -p "$IF_HOME"
-
-if [ "$have_git" = "false" ]; then
-  echo "installing git..."
-  _install_git >> "$INSTALL_LOG" 2>&1
-  echo "  ${C_GRN}✓${C_RST} git installed"
-else
-  echo "  ${C_GRN}✓${C_RST} git already present at $git_path"
+# Short-circuit if everything's already installed.
+if [ "$N" -eq 0 ]; then
+  say "  ${C_GRN}✓${C_RST} all dependencies already installed."
+  echo ""
+  trap - EXIT
+  exit 0
 fi
 
-if [ "$have_gh" = "false" ]; then
-  echo "installing gh..."
-  _install_gh >> "$INSTALL_LOG" 2>&1
-  echo "  ${C_GRN}✓${C_RST} gh installed at $IF_HOME/gh/bin/gh"
-else
-  echo "  ${C_GRN}✓${C_RST} gh already present at $(command -v gh)"
+# Show what's about to happen, then ask.
+for i in $(seq 0 $((N - 1))); do
+  draw_row "$i" "pending"
+done
+echo ""
+
+if ! prompt_yn "Ready to get started?" "Y"; then
+  say "no changes made. goodbye."
+  trap - EXIT
+  exit 0
 fi
 
-# Clear the EXIT trap on success — no need to dump the log.
+# Wipe the prompt + blank line so cursor returns to "after last row".
+# Prompt added 2 lines (blank + prompt with Enter).
+printf '\033[2A\033[J'
+
+# Run each install with in-place row updates.
+for i in "${!FNS[@]}"; do
+  update_row "$i" "running"
+  rc=0
+  "${FNS[$i]}" >> "$INSTALL_LOG" 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    update_row "$i" "done"
+  else
+    update_row "$i" "failed"
+    echo ""
+    die "install of ${PENDING[$i]} failed (rc=$rc) — see $INSTALL_LOG"
+  fi
+done
+
+# Clear EXIT trap on success — no need to dump the log.
 trap - EXIT
 
 echo ""
