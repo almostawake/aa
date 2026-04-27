@@ -176,27 +176,27 @@ have_gh=false
 command -v gh >/dev/null 2>&1 && have_gh=true
 
 # ==========================================================================
-# Build the install list — same shape as if-new.sh's PROV_* arrays
+# Build the install list — same shape as if-new.sh's PROV_* arrays.
+# Already-installed items still appear in the list (rendered green from
+# the start) so the user sees the full picture, not a mystery skip.
 # ==========================================================================
 
 PENDING=()
 RUNNING=()
 DONE=()
 FNS=()
+INSTALLED=()  # parallel array of "true"/"false" — initial state per row
 
-[ "$have_git" = "true" ] || {
-  PENDING+=("install git")
-  RUNNING+=("installing git")
-  DONE+=("git installed")
-  FNS+=("_install_git")
-}
-[ "$have_gh" = "true" ] || {
-  PENDING+=("install gh")
-  RUNNING+=("installing gh")
-  DONE+=("gh installed")
-  FNS+=("_install_gh")
-}
+PENDING+=("install git");  RUNNING+=("installing git"); DONE+=("git installed"); FNS+=("_install_git"); INSTALLED+=("$have_git")
+PENDING+=("install gh");   RUNNING+=("installing gh");  DONE+=("gh installed");  FNS+=("_install_gh");  INSTALLED+=("$have_gh")
+
 N=${#FNS[@]}
+
+# Count how many actually need work.
+N_TODO=0
+for x in "${INSTALLED[@]}"; do
+  [ "$x" = "false" ] && N_TODO=$((N_TODO + 1))
+done
 
 # ==========================================================================
 # Row UI (same shape as if-new.sh draw_prov_row / update_prov_row)
@@ -211,7 +211,7 @@ draw_row() {
     pending) icon="${C_GRAY}○${C_RST}"; color="$C_GRAY"; label="${PENDING[$i]}" ;;
     failed)  icon="${C_RED}✗${C_RST}";  color="$C_RED";  label="${RUNNING[$i]}" ;;
   esac
-  printf '  %b  %b%s%b\n' "$icon" "$color" "$label" "$C_RST"
+  printf '%b  %b%s%b\n' "$icon" "$color" "$label" "$C_RST"
 }
 
 update_row() {
@@ -231,25 +231,28 @@ update_row() {
 
 cat <<BANNER
 
-  ┌───────────────────────────────────────────────────┐
-  │          welcome, impatient futurist (if)         │
-  └───────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│          welcome, impatient futurist (if)         │
+└───────────────────────────────────────────────────┘
 
 BANNER
 
-# Short-circuit if everything's already installed.
-if [ "$N" -eq 0 ]; then
-  say "  ${C_GRN}✓${C_RST} all dependencies already installed."
-  echo ""
+# Render the full list — already-installed rows green from the start,
+# the rest pending.
+for i in $(seq 0 $((N - 1))); do
+  if [ "${INSTALLED[$i]}" = "true" ]; then
+    draw_row "$i" "done"
+  else
+    draw_row "$i" "pending"
+  fi
+done
+echo ""
+
+# Short-circuit if nothing to do.
+if [ "$N_TODO" -eq 0 ]; then
   trap - EXIT
   exit 0
 fi
-
-# Show what's about to happen, then ask.
-for i in $(seq 0 $((N - 1))); do
-  draw_row "$i" "pending"
-done
-echo ""
 
 if ! prompt_yn "Ready to get started?" "Y"; then
   say "no changes made. goodbye."
@@ -258,11 +261,13 @@ if ! prompt_yn "Ready to get started?" "Y"; then
 fi
 
 # Wipe the prompt + blank line so cursor returns to "after last row".
-# Prompt added 2 lines (blank + prompt with Enter).
 printf '\033[2A\033[J'
 
-# Run each install with in-place row updates.
+# Run each pending install with in-place row updates.
 for i in "${!FNS[@]}"; do
+  if [ "${INSTALLED[$i]}" = "true" ]; then
+    continue
+  fi
   update_row "$i" "running"
   rc=0
   "${FNS[$i]}" >> "$INSTALL_LOG" 2>&1 || rc=$?
