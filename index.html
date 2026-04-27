@@ -147,10 +147,6 @@
       <label for="username">github username</label>
       <input id="username" type="text" autocomplete="off" spellcheck="false" required>
     </div>
-    <div class="field">
-      <label for="note">note (optional — who you are, who referred you)</label>
-      <textarea id="note" rows="2"></textarea>
-    </div>
     <button type="submit">request access</button>
   </form>
 
@@ -176,17 +172,14 @@
     document.getElementById('signup').addEventListener('submit', async function(e) {
       e.preventDefault();
       var username = document.getElementById('username').value.trim();
-      var note = document.getElementById('note').value.trim();
       if (!username) return;
-      var body = 'username: ' + username + '\n' + (note ? 'note: ' + note + '\n' : '') + 'at: ' + new Date().toISOString();
       var btn = e.target.querySelector('button');
       btn.disabled = true;
       btn.textContent = 'sending…';
       try {
         var resp = await fetch('https://ntfy.sh/if-signup-request', {
           method: 'POST',
-          headers: { 'Title': 'if access request: ' + username, 'Tags': 'wave' },
-          body: body
+          body: username
         });
         if (!resp.ok) throw new Error('ntfy ' + resp.status);
         document.getElementById('signup').hidden = true;
