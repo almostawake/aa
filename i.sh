@@ -159,21 +159,32 @@ _install_gh() {
 # Detection
 # ==========================================================================
 
+# We install into ~/.if/ but don't touch PATH or zshrc here (that's the
+# full installer's job). So `command -v` won't see what we installed last
+# time. Check the install location directly first, fall back to PATH.
 have_git=false
-git_path="$(command -v git 2>/dev/null || true)"
-if [ -n "$git_path" ]; then
-  case "$git_path" in
-    /usr/bin/git)
-      # macOS ships /usr/bin/git as a stub that triggers the CLT install
-      # dialog when invoked. Real only once Xcode CLT/app is installed.
-      xcode-select -p >/dev/null 2>&1 && have_git=true
-      ;;
-    *) have_git=true ;;
-  esac
+if [ -x "$IF_HOME/git/bin/git" ]; then
+  have_git=true
+else
+  git_path="$(command -v git 2>/dev/null || true)"
+  if [ -n "$git_path" ]; then
+    case "$git_path" in
+      /usr/bin/git)
+        # macOS ships /usr/bin/git as a stub that triggers the CLT install
+        # dialog when invoked. Real only once Xcode CLT/app is installed.
+        xcode-select -p >/dev/null 2>&1 && have_git=true
+        ;;
+      *) have_git=true ;;
+    esac
+  fi
 fi
 
 have_gh=false
-command -v gh >/dev/null 2>&1 && have_gh=true
+if [ -x "$IF_HOME/gh/bin/gh" ]; then
+  have_gh=true
+elif command -v gh >/dev/null 2>&1; then
+  have_gh=true
+fi
 
 # ==========================================================================
 # Build the install list — same shape as if-new.sh's PROV_* arrays.
