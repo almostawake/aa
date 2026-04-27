@@ -437,6 +437,10 @@ fi
 # Clear EXIT trap on success — no need to dump the log.
 trap - EXIT
 
+# Hand off to the full installer (lives in the freshly cloned repo).
+# `exec` replaces this process, so the user sees a clean transition
+# rather than two stacked bash contexts. PATH already has gh+git, /dev/tty
+# is still the real terminal — if-install.sh's prompts work as in a
+# regular curl|bash run.
 echo ""
-echo "next: bash ~/.if/staging/scripts/if-install.sh"
-echo ""
+exec bash "$IF_HOME/staging/scripts/if-install.sh"
