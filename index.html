@@ -11,6 +11,7 @@
       --fg-faint: #999;
       --border: #e0e0e0;
       --accent: #3949ab;
+      --ok: #070;
     }
     body {
       font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
@@ -35,25 +36,13 @@
       color: var(--fg-muted);
       margin: 1em 0;
     }
-    ul {
+    ul, ol {
       margin: 0.6em 0;
       padding-left: 1.4em;
       color: var(--fg-muted);
     }
     li {
       margin: 0.2em 0;
-    }
-    pre {
-      font-family: inherit;
-      font-size: 15px;
-      background: #fafafa;
-      border: 1px solid var(--border);
-      padding: 10px 12px;
-      border-radius: 3px;
-      margin: 0.4em 0;
-      overflow-x: auto;
-      white-space: pre-wrap;
-      word-break: break-all;
     }
     .label {
       color: var(--fg-faint);
@@ -69,6 +58,61 @@
     a:hover {
       text-decoration: underline;
     }
+    form {
+      margin: 0.8em 0;
+    }
+    .field {
+      margin: 0.6em 0;
+    }
+    .field label {
+      display: block;
+      font-size: 13px;
+      color: var(--fg-faint);
+      margin-bottom: 0.2em;
+    }
+    input[type=text],
+    textarea {
+      width: 100%;
+      box-sizing: border-box;
+      font-family: inherit;
+      font-size: 15px;
+      color: var(--fg);
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 6px 8px;
+      outline: none;
+    }
+    input[type=text]:focus,
+    textarea:focus {
+      border-color: var(--accent);
+    }
+    textarea {
+      resize: vertical;
+    }
+    button {
+      font-family: inherit;
+      font-size: 15px;
+      padding: 6px 14px;
+      background: var(--fg);
+      color: #fff;
+      border: 1px solid var(--fg);
+      border-radius: 3px;
+      cursor: pointer;
+      margin-top: 0.4em;
+    }
+    button:hover {
+      background: #000;
+    }
+    button:disabled {
+      background: #bbb;
+      border-color: #bbb;
+      cursor: not-allowed;
+    }
+    #thanks {
+      color: var(--ok);
+      margin: 1em 0;
+    }
     .footer {
       color: var(--fg-faint);
       font-size: 14px;
@@ -82,22 +126,77 @@
   <h1>┌───────────────────────────────────────────────────┐
 │          welcome, impatient futurist (if)         │
 └───────────────────────────────────────────────────┘</h1>
+
   <p>a starter kit for personal automation tools, built on firebase.</p>
 
   <div class="label">prerequisites</div>
   <ul>
     <li>a recent macos</li>
-    <li>a google account</li>
+    <li>a google account (we'll set up a dedicated one below)</li>
   </ul>
 
-  <div class="label">1. install dependencies</div>
-  <pre>curl https://almostawake.com/install.sh | bash</pre>
+  <div class="label">getting started</div>
+  <ol>
+    <li>create a dedicated gmail account for this project</li>
+    <li>create a github account, signing in with that gmail</li>
+    <li>request access ↓ (we'll review and add you as a collaborator)</li>
+  </ol>
 
-  <div class="label">2. create your first app</div>
-  <pre>curl https://almostawake.com/new.sh | bash</pre>
+  <form id="signup" novalidate>
+    <div class="field">
+      <label for="username">github username</label>
+      <input id="username" type="text" autocomplete="off" spellcheck="false" required>
+    </div>
+    <div class="field">
+      <label for="note">note (optional — who you are, who referred you)</label>
+      <textarea id="note" rows="2"></textarea>
+    </div>
+    <button type="submit">request access</button>
+  </form>
 
-  <p>run in terminal.app, in order. takes about ten minutes.</p>
+  <div id="thanks" hidden>
+    ✓ got it. you'll get an email from github when you've been added.
+  </div>
+
+  <div class="label">what happens next</div>
+  <p>
+    once approved, github emails you an invite to the repo. accept it,
+    open the repo, and follow the readme.
+  </p>
+
+  <div class="label">while you wait, you can</div>
+  <ul>
+    <li>enable google cloud free trial on your dedicated gmail (<a href="https://console.cloud.google.com/freetrial" target="_blank">console.cloud.google.com/freetrial</a>)</li>
+    <li>create a dedicated macos user account on the machine you'll run if from</li>
+  </ul>
 
   <p class="footer">questions? <a href="mailto:andrew@almostawake.com">andrew@almostawake.com</a></p>
+
+  <script>
+    document.getElementById('signup').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      var username = document.getElementById('username').value.trim();
+      var note = document.getElementById('note').value.trim();
+      if (!username) return;
+      var body = 'username: ' + username + '\n' + (note ? 'note: ' + note + '\n' : '') + 'at: ' + new Date().toISOString();
+      var btn = e.target.querySelector('button');
+      btn.disabled = true;
+      btn.textContent = 'sending…';
+      try {
+        var resp = await fetch('https://ntfy.sh/if-signup-request', {
+          method: 'POST',
+          headers: { 'Title': 'if access request: ' + username, 'Tags': 'wave' },
+          body: body
+        });
+        if (!resp.ok) throw new Error('ntfy ' + resp.status);
+        document.getElementById('signup').hidden = true;
+        document.getElementById('thanks').hidden = false;
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'request access';
+        alert('that failed (' + err.message + '). try again?');
+      }
+    });
+  </script>
 </body>
 </html>
