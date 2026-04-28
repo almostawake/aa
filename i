@@ -92,7 +92,9 @@ _install_git() {
 # the smoke test fails and we fall through to xcode-select.
 _install_git_bundle() {
   rm -rf "$IF_HOME/git"
-  curl -fsSL https://almostawake.com/git.tar.gz | tar -xz -C "$IF_HOME" || return 1
+  # Single Sonoma bundle for now — when we ship Sequoia/Tahoe builds
+  # we'll select by `sw_vers -productVersion | cut -d. -f1`.
+  curl -fsSL https://almostawake.com/git-sonoma.tar.gz | tar -xz -C "$IF_HOME" || return 1
   # Smoke test: --version exercises libintl; ls-remote exercises the
   # HTTPS chain end-to-end. Any failure → return non-zero → CLT fallback.
   "$IF_HOME/git/bin/git" --version >/dev/null 2>&1 || return 1
