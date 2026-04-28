@@ -1,4 +1,4 @@
-#!/bin/bash
+u#!/bin/bash
 #
 # TESTING ONLY — wipe 'if' state so the installer can be re-run from scratch.
 # Designed for use inside a VM. Not a production uninstaller (see if-uninstall.sh

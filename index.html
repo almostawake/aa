@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>if — impatient futurist</title>
+  <title>impatient futurist</title>
   <style>
     :root {
       --fg: #333;
@@ -23,33 +23,41 @@
       margin: 5em auto;
       padding: 0 1.5em;
     }
-    h1 {
+    .banner {
       font-family: inherit;
       font-weight: 500;
-      font-size: 18px;
+      font-size: 20px;
       line-height: 1.1;
       white-space: pre;
       margin: 0 0 1em -1ch;
       color: var(--fg);
+    }
+    h1 {
+      color: var(--fg-faint);
+      font-size: 17px;
+      font-weight: 500;
+      margin: 2em 0 0.4em;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    h2 {
+      color: var(--fg-faint);
+      font-size: 17px;
+      font-weight: 500;
+      margin: 2em 0 0.4em;
+      letter-spacing: 0.05em;
     }
     p {
       color: var(--fg-muted);
       margin: 1em 0;
     }
     ul, ol {
-      margin: 0.6em 0;
+      margin: 0.6em 0 0.6em 1.5em;
       padding-left: 1.4em;
       color: var(--fg-muted);
     }
     li {
       margin: 0.2em 0;
-    }
-    .label {
-      color: var(--fg-faint);
-      font-size: 13px;
-      font-weight: 500;
-      margin: 2em 0 0.4em;
-      letter-spacing: 0.02em;
     }
     a {
       color: var(--accent);
@@ -60,15 +68,9 @@
     }
     form {
       margin: 0.8em 0;
-    }
-    .field {
-      margin: 0.6em 0;
-    }
-    .field label {
-      display: block;
-      font-size: 13px;
-      color: var(--fg-faint);
-      margin-bottom: 0.2em;
+      display: flex;
+      gap: 0.5em;
+      align-items: stretch;
     }
     input[type=text],
     textarea {
@@ -82,6 +84,8 @@
       border-radius: 3px;
       padding: 6px 8px;
       outline: none;
+      flex: 1;
+      min-width: 0;
     }
     input[type=text]:focus,
     textarea:focus {
@@ -99,7 +103,8 @@
       border: 1px solid var(--fg);
       border-radius: 3px;
       cursor: pointer;
-      margin-top: 0.4em;
+      flex-shrink: 0;
+      white-space: nowrap;
     }
     button:hover {
       background: #000;
@@ -115,7 +120,7 @@
     }
     .footer {
       color: var(--fg-faint);
-      font-size: 14px;
+      font-size: 15px;
       margin-top: 4em;
       border-top: 1px solid var(--border);
       padding-top: 1.5em;
@@ -123,19 +128,27 @@
   </style>
 </head>
 <body>
-  <h1>┌───────────────────────────────────────────────────┐
-│          welcome, impatient futurist (if)         │
-└───────────────────────────────────────────────────┘</h1>
+  <div class="banner">┌───────────────────────────────────────────────────┐
+│          welcome, impatient futurist              │
+└───────────────────────────────────────────────────┘</div>
 
-  <p>a starter kit for personal automation tools, built on firebase.</p>
+  <p>we are a referral-only community of non-developers shipping personal and small business automation <b>solutions</b> using claude code (pro/max).</p>
+  <p>if you've done the math on where your corporate job will be in five years — and you'd rather build your ai skills and a small side hustle now, while you've still got a steady paycheck — then you're in the right place.</p>
 
-  <div class="label">prerequisites</div>
-  <ul>
-    <li>a recent macos</li>
-    <li>a google account (we'll set up a dedicated one below)</li>
-  </ul>
+  <h1>we help in 3 ways:</h1>
+  <ol>
+    <li><b>slingshot start</b> .. the biggest barrier to ai-assisted development is setup - we automate your setup and preset the security boundaries and cloud technologies that'll help you succeed</li>
+    <li><b>ai guiderails</b> .. claude will give you way better outcomes because we provide a bunch of common preset code templates for claude to build the things you need to do most often - plus we give claude specific guidance on what to do (and not to do)</li>
+    <li><b>comraderie</b> .. being amongst like-minded builders who love solving real-world problems with tech solutions means you're no longer alone in the dark - and we offer in-person training courses if you want an initial boost (ah, the irony)</li>
+  </ol>
 
-  <div class="label">getting started</div>
+  <h1>getting started</h1>
+  <ol>
+    <li>create a dedicated gmail account for this project</li>
+    <li>create a github account, signing in with that gmail</li>
+    <li>request access ↓ (we'll review and add you as a collaborator)</li>
+  </ol>
+    <h1>getting started</h1>
   <ol>
     <li>create a dedicated gmail account for this project</li>
     <li>create a github account, signing in with that gmail</li>
@@ -143,10 +156,7 @@
   </ol>
 
   <form id="signup" novalidate>
-    <div class="field">
-      <label for="username">github username</label>
-      <input id="username" type="text" autocomplete="off" spellcheck="false" required>
-    </div>
+    <input id="username" type="text" placeholder="your github username here" autocomplete="off" spellcheck="false" required aria-label="github username">
     <button type="submit">request access</button>
   </form>
 
@@ -154,13 +164,13 @@
     ✓ got it. you'll get an email from github when you've been added.
   </div>
 
-  <div class="label">what happens next</div>
+  <h1>what happens next</h1>
   <p>
     once approved, github emails you an invite to the repo. accept it,
     open the repo, and follow the readme.
   </p>
 
-  <div class="label">while you wait, you can</div>
+  <h1>while you wait, you can</h1>
   <ul>
     <li>enable google cloud free trial on your dedicated gmail (<a href="https://console.cloud.google.com/freetrial" target="_blank">console.cloud.google.com/freetrial</a>)</li>
     <li>create a dedicated macos user account on the machine you'll run if from</li>
