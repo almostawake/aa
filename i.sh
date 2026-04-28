@@ -337,7 +337,9 @@ fi
 # ==========================================================================
 
 echo ""
+echo ""
 printf '%bFirst: Installing git and github software.%b\n' "$C_BLD" "$C_RST"
+echo ""
 echo "Techy stuff you'll get to know later. We use it for installing stuff for you today."
 echo ""
 
@@ -376,7 +378,9 @@ export PATH="$IF_HOME/gh/bin:$IF_HOME/git/bin:$PATH"
 
 if ! gh auth status >/dev/null 2>&1; then
   echo ""
+  echo ""
   printf '%bNext: signing into github%b\n' "$C_BLD" "$C_RST"
+  echo ""
   echo "This bit involves a manual step from you. Here's what's going to happen.."
   cat <<SIGNPOST
 
@@ -407,13 +411,13 @@ gh auth status >/dev/null 2>&1 || need_login=true
 if [ "$need_login" = "true" ] || [ "$need_clone" = "true" ]; then
   echo ""
   printf '%bThe github bit%b\n' "$C_BLD" "$C_RST"
-  echo ""
 
   if [ "$need_login" = "true" ]; then
-    # Filter gh's verbose `- gh config set ...` action line (the ✓ that
-    # follows confirms what happened). awk so empty match doesn't 1-exit.
-    gh auth login </dev/tty 2>&1 | awk '!/^- gh config/'
-    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+    # Run gh auth login directly (no pipe-filter): when gh's stdout is
+    # piped, gh detects the non-tty and switches to a less-interactive
+    # mode that doesn't auto-launch the browser. Worth keeping the
+    # one verbose `- gh config set ...` line for the working flow.
+    if ! gh auth login </dev/tty; then
       echo ""
       die "github sign-in didn't complete"
     fi
