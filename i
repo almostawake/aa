@@ -14,13 +14,15 @@ set -e
 
 if [ -t 1 ]; then
   C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_GRAY=$'\033[90m'
+  C_BLU=$'\033[34m'
   C_BLD=$'\033[1m'; C_RST=$'\033[0m'
 else
-  C_RED=""; C_GRN=""; C_GRAY=""; C_BLD=""; C_RST=""
+  C_RED=""; C_GRN=""; C_GRAY=""; C_BLU=""; C_BLD=""; C_RST=""
 fi
 
 die() { printf "${C_RED}error:${C_RST} %s\n" "$*" >&2; exit 1; }
 say() { printf '%s\n' "$*"; }
+heading() { printf "${C_BLD}${C_BLU}%s${C_RST}\n" "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"; }
 
 prompt_yn() {
   local q="$1" def="$2" hint answer
@@ -305,7 +307,7 @@ log "i: user accepted"
 
 echo ""
 echo ""
-printf '%bFirst: Installing git and github software.%b\n' "$C_BLD" "$C_RST"
+heading "First: Installing git and github software."
 echo ""
 echo "Techy bits you'll get to know later. We use it for installing stuff for you today."
 echo ""
@@ -349,7 +351,7 @@ export PATH="$IF_HOME/gh/bin:$IF_HOME/git/bin:$PATH"
 if ! gh auth status >/dev/null 2>&1; then
   echo ""
   echo ""
-  printf '%bNext: signing into github%b\n' "$C_BLD" "$C_RST"
+  heading "Next: signing into github"
   echo ""
   echo "This bit involves a manual step from you. Here's what's going to happen.."
   cat <<SIGNPOST
@@ -378,7 +380,7 @@ fi
 # the silent sync below doesn't warrant its own header.
 if ! gh auth status >/dev/null 2>&1; then
   echo ""
-  printf "%bNow: github's doing its bit..%b\n" "$C_BLD" "$C_RST"
+  heading "Now: github's doing its bit.."
   echo ""
   # Direct invocation (no pipe-filter): gh isatty()-checks stdout and
   # downgrades the UI when piped — including dropping the auto browser
@@ -419,7 +421,7 @@ trap - EXIT
 # transition into the bigger install phase).
 echo ""
 echo ""
-printf "%bRight, now let's install the core technologies you'll be using:%b\n" "$C_BLD" "$C_RST"
+heading "Right, now let's install the core technologies you'll be using:"
 echo ""
 
 # Hand off to the full installer in ~/.if/staging. exec replaces this
