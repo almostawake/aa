@@ -400,53 +400,58 @@ SIGNPOST
 fi
 
 # ==========================================================================
-# The github bit — actual auth + clone (only renders when there's work)
+# Now: github's doing its bit (gh auth login when needed; sync staging
+# silently in either case)
 # ==========================================================================
 
-need_login=false
-need_clone=false
-gh auth status >/dev/null 2>&1 || need_login=true
-[ -d "$IF_HOME/staging/.git" ] || need_clone=true
-
-if [ "$need_login" = "true" ] || [ "$need_clone" = "true" ]; then
+# Heading + visible gh auth login only when login is actually needed —
+# the silent sync below doesn't warrant its own header.
+if ! gh auth status >/dev/null 2>&1; then
   echo ""
-  printf '%bThe github bit%b\n' "$C_BLD" "$C_RST"
-
-  if [ "$need_login" = "true" ]; then
-    # Run gh auth login directly (no pipe-filter): when gh's stdout is
-    # piped, gh detects the non-tty and switches to a less-interactive
-    # mode that doesn't auto-launch the browser. Worth keeping the
-    # one verbose `- gh config set ...` line for the working flow.
-    if ! gh auth login </dev/tty; then
-      echo ""
-      die "github sign-in didn't complete"
-    fi
+  printf "%bNow: github's doing its bit..%b\n" "$C_BLD" "$C_RST"
+  echo ""
+  # Direct invocation (no pipe-filter): gh isatty()-checks stdout and
+  # downgrades the UI when piped — including dropping the auto browser
+  # launch. Live with the one verbose `- gh config set ...` line in
+  # exchange for the working flow.
+  if ! gh auth login </dev/tty; then
+    echo ""
+    die "github sign-in didn't complete"
   fi
+fi
 
-  if [ "$need_clone" = "true" ]; then
-    # gh's "Could not resolve" / "not found" / "404" are permission/repo
-    # issues; anything else is dylib/network/etc. — keep that distinction
-    # in the failure message rather than blaming permissions for everything.
-    clone_err=$(gh repo clone almostawake/if "$IF_HOME/staging" 2>&1 | tee -a "$INSTALL_LOG")
-    clone_rc=${PIPESTATUS[0]}
-    if [ "$clone_rc" -ne 0 ]; then
-      echo ""
-      if printf '%s' "$clone_err" | grep -qiE '404|not found|could not resolve host|repository not found'; then
-        echo "looks like a permissions issue — you may not have been added as"
-        echo "a collaborator yet. request access at https://almostawake.com."
-      else
-        echo "clone failed — see error above and the log tail below."
-      fi
-      exit 1
+# Sync ~/.if/staging silently. Clone if missing; --ff-only pull if
+# present. Pull failures (local divergence) are non-fatal — warn and
+# use the existing checkout. Clone failures ARE fatal: pattern-match
+# the log tail to distinguish permission vs other (network / dylib).
+if [ -d "$IF_HOME/staging/.git" ]; then
+  if ! ( cd "$IF_HOME/staging" && git pull --ff-only --quiet ) >> "$INSTALL_LOG" 2>&1; then
+    echo ""
+    echo "warning: couldn't pull latest from origin (local changes?). using existing checkout."
+  fi
+else
+  if ! gh repo clone almostawake/if "$IF_HOME/staging" >> "$INSTALL_LOG" 2>&1; then
+    echo ""
+    if tail -20 "$INSTALL_LOG" | grep -qiE '404|not found|could not resolve host|repository not found'; then
+      echo "looks like a permissions issue — you may not have been added as"
+      echo "a collaborator yet. request access at https://almostawake.com."
+    else
+      echo "clone failed — see log tail below."
     fi
+    exit 1
   fi
 fi
 
 # Clear EXIT trap on success — no need to dump the log.
 trap - EXIT
 
-# Hand off to the full installer (lives in the freshly cloned repo).
-# `exec` replaces this process so the user sees a clean transition;
-# PATH/dev/tty/env all carry over.
+# Two blank lines before this heading (extra breathing room for the
+# transition into the bigger install phase).
 echo ""
+echo ""
+printf "%bRight, now let's install the core technologies you'll be using:%b\n" "$C_BLD" "$C_RST"
+echo ""
+
+# Hand off to the full installer in ~/.if/staging. exec replaces this
+# process so PATH / dev/tty / env carry over cleanly.
 exec bash "$IF_HOME/staging/scripts/i"
