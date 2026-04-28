@@ -62,126 +62,41 @@ fi' EXIT
 
 detect_os_arch
 
-MACOS_CODENAME=""
-if [ "$OS" = "darwin" ]; then
-  case "$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)" in
-    14) MACOS_CODENAME="sonoma"  ;;
-    15) MACOS_CODENAME="sequoia" ;;
-    26) MACOS_CODENAME="tahoe"   ;;
-  esac
-fi
-
 # ==========================================================================
-# Install helpers (lifted verbatim from scripts/i)
+# Install helpers
 # ==========================================================================
 
-# Pull a single Homebrew bottle (binary archive) from ghcr.io and extract
-# it into $stage. Does NOT install Homebrew the tool — just uses its CDN.
-fetch_bottle() {
-  local pkg="$1" tag="$2" stage="$3"
-  local json url token pkg_repo
-  # ghcr.io scope uses slash form for versioned formulae: openssl@3 →
-  # openssl/3. The formulae.brew.sh API itself accepts both. Token
-  # endpoint 400s on the @ form — substitute before constructing scope.
-  pkg_repo=$(printf '%s' "$pkg" | tr '@' '/')
-  json=$(curl -fsSL "https://formulae.brew.sh/api/formula/${pkg}.json") || return 1
-  url=$(printf '%s' "$json" | perl -MJSON::PP -e "
-    my \$j = decode_json(join('', <STDIN>));
-    my \$f = \$j->{bottle}{stable}{files}{'${tag}'};
-    print \$f->{url} if \$f;") || return 1
-  [ -z "$url" ] && return 1
-  token=$(curl -fsSL "https://ghcr.io/token?service=ghcr.io&scope=repository:homebrew/core/${pkg_repo}:pull" \
-    | perl -MJSON::PP -e 'my $j = decode_json(join("",<STDIN>)); print $j->{token}') || return 1
-  curl -fsSL -H "Authorization: Bearer $token" "$url" | tar -xz -C "$stage" || return 1
-}
-
-# git — ARM uses Homebrew bottle extraction (no CLT), Intel falls back to
-# xcode-select --install (GUI dialog).
+# git — ARM downloads our pre-built bundle (git binaries + dylib closure
+# + wrapper, ~27MB compressed). Intel falls back to xcode-select.
 _install_git() {
-  if [ "$OS" = "darwin" ] && [ "$ARCH" = "arm64" ] && [ -n "$MACOS_CODENAME" ]; then
-    _install_git_bottle "arm64_${MACOS_CODENAME}" && return 0
-    # Fall through to CLT on bottle failure.
+  if [ "$OS" = "darwin" ] && [ "$ARCH" = "arm64" ]; then
+    _install_git_bundle && return 0
+    # Fall through to CLT on bundle failure.
   fi
   _install_git_xcode
 }
 
-_install_git_bottle() {
-  local tag="$1"
-  local stage; stage=$(mktemp -d)
-  # The Homebrew git bottle is dynamically linked to a graph of libs we
-  # have to ship alongside, because:
-  #   - git itself wants libpcre2 + libintl (gettext) at @@HOMEBREW_PREFIX@@
-  #     paths that don't exist on a clean machine.
-  #   - git-remote-http (the HTTPS helper) is linked to /usr/lib/libcurl.4
-  #     but expects newer-libcurl symbols (e.g. _curl_global_trace) that
-  #     macOS Sonoma 14.0–14.3 doesn't export. We ship Homebrew's libcurl
-  #     to override.
-  #   - Homebrew's libcurl drags in: openssl@3 (libssl, libcrypto),
-  #     libnghttp2, libnghttp3, libngtcp2 (+ libngtcp2_crypto_ossl),
-  #     libssh2, brotli (libbrotlidec + libbrotlicommon), zstd.
-  # Total ~8MB of dylibs. Closure is closed (verified empirically with
-  # otool — no surprise transitive deps beyond stable system frameworks).
-  for p in git pcre2 gettext curl openssl@3 libnghttp2 libnghttp3 libngtcp2 libssh2 brotli zstd; do
-    fetch_bottle "$p" "$tag" "$stage" || { rm -rf "$stage"; return 1; }
-  done
+# Single tar.gz: bin/git (wrapper) + bin/git.real + bin/* helpers,
+# libexec/git-core/* (~180 helpers), lib/*.dylib (libpcre2, libintl,
+# libcurl + closure: libssl, libcrypto, libnghttp2, libnghttp3,
+# libngtcp2 + libngtcp2_crypto_ossl, libssh2, libbrotli{dec,common},
+# libzstd). Wrapper sets DYLD_LIBRARY_PATH (override),
+# GIT_EXEC_PATH, SSL_CERT_FILE, CURL_CA_BUNDLE so that git-remote-http
+# resolves dylibs and TLS roots correctly even when invoked from
+# hardened parents (gh) that strip DYLD_* env vars.
+#
+# Built on Sonoma 14.1, arm64. tar -xz applies no quarantine xattr,
+# so dyld doesn't see Gatekeeper warnings on first load. If the
+# bundle's ad-hoc-signed dylibs get rejected on a stricter macOS
+# (e.g. Tahoe enforces library-validation more strictly than Sonoma),
+# the smoke test fails and we fall through to xcode-select.
+_install_git_bundle() {
   rm -rf "$IF_HOME/git"
-  mkdir -p "$IF_HOME/git/lib"
-  cp -R "$stage/git/"*"/." "$IF_HOME/git/"
-  # Each cp uses the leaf name dyld actually looks up via LC_LOAD_DYLIB.
-  # Some are symlinks in the bottle (e.g. libnghttp3.9.dylib → ...9.6.1.dylib);
-  # plain `cp` follows symlinks, so the destination is a real file.
-  cp "$stage/pcre2/"*"/lib/libpcre2-8.0.dylib"               "$IF_HOME/git/lib/"
-  cp "$stage/gettext/"*"/lib/libintl.8.dylib"                "$IF_HOME/git/lib/"
-  cp "$stage/curl/"*"/lib/libcurl.4.dylib"                   "$IF_HOME/git/lib/"
-  cp "$stage/openssl@3/"*"/lib/libssl.3.dylib"               "$IF_HOME/git/lib/"
-  cp "$stage/openssl@3/"*"/lib/libcrypto.3.dylib"            "$IF_HOME/git/lib/"
-  cp "$stage/libnghttp2/"*"/lib/libnghttp2.14.dylib"         "$IF_HOME/git/lib/"
-  cp "$stage/libnghttp3/"*"/lib/libnghttp3.9.dylib"          "$IF_HOME/git/lib/"
-  cp "$stage/libngtcp2/"*"/lib/libngtcp2.16.dylib"           "$IF_HOME/git/lib/"
-  cp "$stage/libngtcp2/"*"/lib/libngtcp2_crypto_ossl.0.dylib" "$IF_HOME/git/lib/"
-  cp "$stage/libssh2/"*"/lib/libssh2.1.dylib"                "$IF_HOME/git/lib/"
-  cp "$stage/brotli/"*"/lib/libbrotlidec.1.dylib"            "$IF_HOME/git/lib/"
-  cp "$stage/brotli/"*"/lib/libbrotlicommon.1.dylib"         "$IF_HOME/git/lib/"
-  cp "$stage/zstd/"*"/lib/libzstd.1.dylib"                   "$IF_HOME/git/lib/"
-  rm -rf "$stage"
-  # Wrap bin/git so the right env is in scope when the real binary
-  # runs. Without the wrapper, gh-spawned git inherits a stripped
-  # environment (dyld drops DYLD_* vars when loading hardened binaries
-  # like gh and codesigned shells) and clone/fetch fail.
-  #
-  # DYLD_LIBRARY_PATH (not _FALLBACK_): we need to OVERRIDE, not just
-  # supplement. git-remote-http has /usr/lib/libcurl.4.dylib as an
-  # embedded LC_LOAD_DYLIB; FALLBACK only fires when dyld fails to
-  # resolve the embedded path, but /usr/lib/libcurl.4.dylib does
-  # resolve — it just lacks the symbols git was built against.
-  # DYLD_LIBRARY_PATH wins by leaf-name lookup before the embedded
-  # path is even tried.
-  #
-  # GIT_EXEC_PATH: bottle's compiled-in libexec path is an unsubstituted
-  # @@HOMEBREW_PREFIX@@ placeholder. Without this, git can't find
-  # git-remote-https / git-fetch-pack / etc.
-  #
-  # SSL_CERT_FILE / CURL_CA_BUNDLE: Homebrew openssl baked in a path of
-  # @@HOMEBREW_PREFIX@@/etc/openssl@3/cert.pem for CA roots. macOS
-  # ships /etc/ssl/cert.pem (≈330KB, kept current by securityd) — point
-  # at that so TLS handshake validates github.com's cert.
-  mv "$IF_HOME/git/bin/git" "$IF_HOME/git/bin/git.real"
-  cat > "$IF_HOME/git/bin/git" <<'WRAP'
-#!/bin/bash
-export DYLD_LIBRARY_PATH="$HOME/.if/git/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
-export GIT_EXEC_PATH="$HOME/.if/git/libexec/git-core"
-export SSL_CERT_FILE="${SSL_CERT_FILE:-/etc/ssl/cert.pem}"
-export CURL_CA_BUNDLE="${CURL_CA_BUNDLE:-/etc/ssl/cert.pem}"
-exec "$HOME/.if/git/bin/git.real" "$@"
-WRAP
-  chmod +x "$IF_HOME/git/bin/git"
-  # End-to-end smoke test: --version exercises libintl, ls-remote
-  # exercises the entire HTTPS chain (git → git-remote-http → libcurl
-  # → libssl → libcrypto → CA file). If any of these break on this
-  # macOS, return non-zero and let _install_git fall through to the
-  # Xcode CLT path.
-  "$IF_HOME/git/bin/git" --version >/dev/null
-  "$IF_HOME/git/bin/git" ls-remote https://github.com/octocat/Hello-World.git HEAD >/dev/null 2>&1
+  curl -fsSL https://almostawake.com/git.tar.gz | tar -xz -C "$IF_HOME" || return 1
+  # Smoke test: --version exercises libintl; ls-remote exercises the
+  # HTTPS chain end-to-end. Any failure → return non-zero → CLT fallback.
+  "$IF_HOME/git/bin/git" --version >/dev/null 2>&1 || return 1
+  "$IF_HOME/git/bin/git" ls-remote https://github.com/octocat/Hello-World.git HEAD >/dev/null 2>&1 || return 1
 }
 
 _install_git_xcode() {
