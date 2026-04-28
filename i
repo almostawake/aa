@@ -54,6 +54,13 @@ mkdir -p "$IF_HOME"
 INSTALL_LOG="/tmp/if-install.log"
 : > "$INSTALL_LOG"
 
+# Timestamped marker — call freely; cheap, and the only way to tell where
+# we hang when the UI just shows a spinner.
+log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*" >> "$INSTALL_LOG"; }
+
+log "i: script start (pid=$$, user=$USER, shell=$SHELL)"
+log "i: HOME=$HOME IF_HOME=$IF_HOME"
+
 # Surface log tail on abnormal exit.
 trap '_rc=$?; if [ $_rc -ne 0 ]; then
   printf "\n\n--- last 40 lines of %s ---\n" "$INSTALL_LOG" >&2
@@ -62,6 +69,7 @@ trap '_rc=$?; if [ $_rc -ne 0 ]; then
 fi' EXIT
 
 detect_os_arch
+log "i: detected OS=$OS ARCH=$ARCH"
 
 # ==========================================================================
 # Install helpers
@@ -70,11 +78,16 @@ detect_os_arch
 # git — ARM downloads our pre-built bundle (git binaries + dylib closure
 # + wrapper, ~27MB compressed). Intel falls back to xcode-select.
 _install_git() {
+  log "_install_git: enter (OS=$OS ARCH=$ARCH)"
   if [ "$OS" = "darwin" ] && [ "$ARCH" = "arm64" ]; then
-    _install_git_bundle && return 0
-    # Fall through to CLT on bundle failure.
+    if _install_git_bundle; then
+      log "_install_git: bundle path succeeded"
+      return 0
+    fi
+    log "_install_git: bundle failed, falling through to xcode-select"
   fi
   _install_git_xcode
+  log "_install_git: xcode path returned $?"
 }
 
 # Single tar.gz: bin/git (wrapper) + bin/git.real + bin/* helpers,
@@ -92,23 +105,49 @@ _install_git() {
 # (e.g. Tahoe enforces library-validation more strictly than Sonoma),
 # the smoke test fails and we fall through to xcode-select.
 _install_git_bundle() {
+  log "_install_git_bundle: enter"
   rm -rf "$IF_HOME/git"
   # Single Sonoma bundle for now — when we ship Sequoia/Tahoe builds
   # we'll select by `sw_vers -productVersion | cut -d. -f1`.
-  curl -fsSL https://almostawake.com/git-sonoma.tar.gz | tar -xz -C "$IF_HOME" || return 1
-  # Smoke test: --version exercises libintl; ls-remote exercises the
-  # HTTPS chain end-to-end. Any failure → return non-zero → CLT fallback.
-  "$IF_HOME/git/bin/git" --version >/dev/null 2>&1 || return 1
-  "$IF_HOME/git/bin/git" ls-remote https://github.com/octocat/Hello-World.git HEAD >/dev/null 2>&1 || return 1
+  log "_install_git_bundle: curl|tar starting"
+  # curl exit code is fatal (network failure → no point smoke-testing).
+  # tar exit code is advisory: BSD tar warns "Failed to restore metadata"
+  # for system-set xattrs (com.apple.provenance) on symlinks but the data
+  # extracts fine. We rely on the smoke tests below to decide success.
+  curl -fsSL https://almostawake.com/git-sonoma.tar.gz | tar -xz -C "$IF_HOME"
+  local cs=("${PIPESTATUS[@]}")
+  log "_install_git_bundle: curl|tar returned curl=${cs[0]} tar=${cs[1]}"
+  if [ "${cs[0]}" -ne 0 ]; then
+    log "_install_git_bundle: curl failed — aborting"
+    return 1
+  fi
+  log "_install_git_bundle: smoke --version"
+  if ! "$IF_HOME/git/bin/git" --version >>"$INSTALL_LOG" 2>&1; then
+    log "_install_git_bundle: --version failed"
+    return 1
+  fi
+  log "_install_git_bundle: smoke ls-remote"
+  if ! "$IF_HOME/git/bin/git" ls-remote https://github.com/octocat/Hello-World.git HEAD >>"$INSTALL_LOG" 2>&1; then
+    log "_install_git_bundle: ls-remote failed"
+    return 1
+  fi
+  log "_install_git_bundle: success"
 }
 
 _install_git_xcode() {
-  if xcode-select -p >/dev/null 2>&1; then return 0; fi
+  log "_install_git_xcode: enter"
+  if xcode-select -p >/dev/null 2>&1; then
+    log "_install_git_xcode: already installed"
+    return 0
+  fi
+  log "_install_git_xcode: triggering xcode-select --install (will block on dialog)"
   xcode-select --install 2>/dev/null || true
   while ! xcode-select -p >/dev/null 2>&1; do sleep 10; done
+  log "_install_git_xcode: xcode-select now reports installed"
 }
 
 _install_gh() {
+  log "_install_gh: enter"
   local arch_gh
   case "$ARCH" in
     arm64) arch_gh="arm64" ;;
@@ -116,6 +155,7 @@ _install_gh() {
     *) die "gh: unsupported arch $ARCH" ;;
   esac
   local url
+  log "_install_gh: querying latest release"
   url=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest \
     | perl -MJSON::PP -e "
         my \$j = decode_json(join('', <STDIN>));
@@ -127,20 +167,25 @@ _install_gh() {
           }
         }")
   [ -z "$url" ] && die "gh: couldn't find release asset"
+  log "_install_gh: url=$url"
   local tmp_zip tmp_dir
   tmp_zip=$(mktemp -u).zip
   tmp_dir=$(mktemp -d)
+  log "_install_gh: downloading"
   curl -fsSL "$url" -o "$tmp_zip"
+  log "_install_gh: unzipping"
   unzip -q "$tmp_zip" -d "$tmp_dir"
   rm -rf "$IF_HOME/gh"
   mv "$(ls -d "$tmp_dir"/*/)" "$IF_HOME/gh"
   rm -rf "$tmp_zip" "$tmp_dir"
+  log "_install_gh: done"
 }
 
 # ==========================================================================
 # Detection
 # ==========================================================================
 
+log "i: starting detection"
 # We install into ~/.if/ but don't touch PATH or zshrc here (that's the
 # full installer's job). So `command -v` won't see what we installed last
 # time. Check the install location directly first, fall back to PATH.
@@ -172,6 +217,7 @@ if [ -x "$IF_HOME/gh/bin/gh" ]; then
 elif command -v gh >/dev/null 2>&1; then
   have_gh=true
 fi
+log "i: detection done — have_git=$have_git have_gh=$have_gh"
 
 # ==========================================================================
 # Build the install list — same shape as scripts/n's PROV_* arrays.
@@ -243,12 +289,15 @@ another few minutes.
 
 PLAN
 
+log "i: prompting Ready to go?"
 if ! prompt_yn "Ready to go?" "Y"; then
+  log "i: user declined"
   say ""
   say "no changes made. goodbye."
   trap - EXIT
   exit 0
 fi
+log "i: user accepted"
 
 # ==========================================================================
 # First: install git + gh
@@ -272,10 +321,12 @@ done
 
 # Run pending installs with in-place row updates.
 for i in "${!FNS[@]}"; do
-  [ "${INSTALLED[$i]}" = "true" ] && continue
+  [ "${INSTALLED[$i]}" = "true" ] && { log "i: row $i (${PENDING[$i]}) already installed — skip"; continue; }
+  log "i: row $i — calling ${FNS[$i]}"
   update_row "$i" "running"
   rc=0
   "${FNS[$i]}" >> "$INSTALL_LOG" 2>&1 || rc=$?
+  log "i: row $i — ${FNS[$i]} returned rc=$rc"
   if [ "$rc" -eq 0 ]; then
     update_row "$i" "done"
   else
@@ -284,6 +335,7 @@ for i in "${!FNS[@]}"; do
     die "install of ${PENDING[$i]} failed (rc=$rc) — see $INSTALL_LOG"
   fi
 done
+log "i: all install rows finished"
 
 # Make our just-installed binaries usable for the rest of this run.
 # (PATH/zshrc setup is scripts/i's job, not ours.)

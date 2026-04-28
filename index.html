@@ -20,7 +20,7 @@
       color: var(--fg);
       background: #fff;
       max-width: 36em;
-      margin: 5em auto;
+      margin: 0 auto 5em;
       padding: 0 1.5em;
     }
     .banner {
@@ -29,8 +29,21 @@
       font-size: 20px;
       line-height: 1.1;
       white-space: pre;
-      margin: 0 0 1em -1ch;
+      margin: 0 0 0 -1ch;
       color: var(--fg);
+      position: sticky;
+      top: 0;
+      background: #fff;
+      z-index: 10;
+      padding: 2.5em 0 0.5em;
+      border-bottom: 1px solid transparent;
+      transition: border-color 0.2s ease;
+    }
+    .banner.scrolled {
+      border-bottom-color: var(--border);
+    }
+    .banner + * {
+      margin-top: 0.5em;
     }
     h1 {
       color: var(--fg-faint);
@@ -132,8 +145,8 @@
 │          welcome, impatient futurist              │
 └───────────────────────────────────────────────────┘</div>
 
-  <p>we are a referral-only community of non-developers shipping personal and small business automation <b>solutions</b> using claude code (pro/max).</p>
-  <p>if you've done the math on where your corporate job will be in five years — and you'd rather build your ai skills and a small side hustle now, while you've still got a steady paycheck — then you're in the right place.</p>
+  <p>we are a referral-only community of non-developers shipping personal and small business automation <b>solutions</b> using claude code (pro/max)</p>
+  <p>if you've done the math on where your corporate job will be in five years — and you'd rather build your ai skills and a small side hustle now, while you've still got a steady paycheck — then you're in the right place</p>
 
   <h1>we help in 3 ways:</h1>
   <ol>
@@ -142,17 +155,24 @@
     <li><b>comraderie</b> .. being amongst like-minded builders who love solving real-world problems with tech solutions means you're no longer alone in the dark - and we offer in-person training courses if you want an initial boost (ah, the irony)</li>
   </ol>
 
-  <h1>getting started</h1>
+  <h1>our security philosophy (important)</h1>
+
+  <p><em>andrew trusts anthropic's "public benefit corporation" status, but he understands that most people feel uneasy about ai security in general</em></p>
+  <p>the best results for building with claude's assistance come from working in "yolo" mode, where it has the "god" privileges to consider and do more things on your behalf</p>
+  <p>this comes with the risk that claude could deliberately or inadvertently damage your junk </p>
+  <p>this seems like a conundrum but actually there's a way to achieve both: just keep your personal junk totally separate from your building (claude) junk. this is actually pretty simple to achieve if we:</p>
+
+    <ul>
+    <li>enable google cloud free trial on your dedicated gmail (<a href="https://console.cloud.google.com/freetrial" target="_blank">console.cloud.google.com/freetrial</a>)</li>
+    <li>create a dedicated macos user account on the machine you'll run if from</li>
+  </ul>
+  
+    <h1>prerequisites</h1>
+
   <ol>
-    <li>create a dedicated gmail account for this project</li>
-    <li>create a github account, signing in with that gmail</li>
-    <li>request access ↓ (we'll review and add you as a collaborator)</li>
-  </ol>
-    <h1>getting started</h1>
-  <ol>
-    <li>create a dedicated gmail account for this project</li>
-    <li>create a github account, signing in with that gmail</li>
-    <li>request access ↓ (we'll review and add you as a collaborator)</li>
+    <li><b>glass half full</b> .. </li>
+    <li><b>mac</b> .. sorry. andrew's brother nick is working on a windows variant of everything, but it's a huge investment in time, so we're not setting a date for it. honestly, if you're keen go and buy a second hand macbook air (apple silicon), it's totes worth the outlay. andrew uses a 2023 macbook air M2 with 16gb ram and it's never been slow</li>
+    <li><b>comraderie</b> .. being amongst like-minded builders who love solving real-world problems with tech solutions means you're no longer alone in the dark - and we offer in-person training courses if you want an initial boost (ah, the irony)</li>
   </ol>
 
   <form id="signup" novalidate>
@@ -179,6 +199,13 @@
   <p class="footer">questions? <a href="mailto:andrew@almostawake.com">andrew@almostawake.com</a></p>
 
   <script>
+    var banner = document.querySelector('.banner');
+    var onScroll = function() {
+      banner.classList.toggle('scrolled', window.scrollY > 4);
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+
     document.getElementById('signup').addEventListener('submit', async function(e) {
       e.preventDefault();
       var username = document.getElementById('username').value.trim();
