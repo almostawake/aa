@@ -50,6 +50,7 @@ detect_os_arch() {
 # ==========================================================================
 
 IF_HOME="$HOME/.if"
+mkdir -p "$IF_HOME"
 INSTALL_LOG="/tmp/if-install.log"
 : > "$INSTALL_LOG"
 
