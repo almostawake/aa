@@ -317,8 +317,31 @@ cat <<BANNER
 
 BANNER
 
-# Render the full list — already-installed rows green from the start,
-# the rest pending.
+cat <<PLAN
+Let's save you a few months of pain and suffering by installing
+everything you need in a couple of minutes. When we're done you'll
+be able to kick off your first project, which will be live in
+another few minutes.
+
+PLAN
+
+if ! prompt_yn "Ready to go?" "Y"; then
+  say ""
+  say "no changes made. goodbye."
+  trap - EXIT
+  exit 0
+fi
+
+# ==========================================================================
+# First: install git + gh
+# ==========================================================================
+
+echo ""
+printf '%bFirst: Installing git and github software.%b\n' "$C_BLD" "$C_RST"
+echo "Techy stuff you'll get to know later. We use it for installing stuff for you today."
+echo ""
+
+# Render initial state — already-installed rows green from the start.
 for i in $(seq 0 $((N - 1))); do
   if [ "${INSTALLED[$i]}" = "true" ]; then
     draw_row "$i" "done"
@@ -326,58 +349,36 @@ for i in $(seq 0 $((N - 1))); do
     draw_row "$i" "pending"
   fi
 done
-echo ""
 
-# Only prompt + run the install loop if there's actually something to do.
-# If everything's already installed we fall straight through to auth+clone.
-if [ "$N_TODO" -gt 0 ]; then
-  if ! prompt_yn "Ready to get started?" "Y"; then
-    say "no changes made. goodbye."
-    trap - EXIT
-    exit 0
+# Run pending installs with in-place row updates.
+for i in "${!FNS[@]}"; do
+  [ "${INSTALLED[$i]}" = "true" ] && continue
+  update_row "$i" "running"
+  rc=0
+  "${FNS[$i]}" >> "$INSTALL_LOG" 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    update_row "$i" "done"
+  else
+    update_row "$i" "failed"
+    echo ""
+    die "install of ${PENDING[$i]} failed (rc=$rc) — see $INSTALL_LOG"
   fi
-
-  # Wipe the prompt + blank line so cursor returns to "after last row".
-  printf '\033[2A\033[J'
-
-  # Run each pending install with in-place row updates.
-  for i in "${!FNS[@]}"; do
-    if [ "${INSTALLED[$i]}" = "true" ]; then
-      continue
-    fi
-    update_row "$i" "running"
-    rc=0
-    "${FNS[$i]}" >> "$INSTALL_LOG" 2>&1 || rc=$?
-    if [ "$rc" -eq 0 ]; then
-      update_row "$i" "done"
-    else
-      update_row "$i" "failed"
-      echo ""
-      die "install of ${PENDING[$i]} failed (rc=$rc) — see $INSTALL_LOG"
-    fi
-  done
-fi
-
-# ==========================================================================
-# Auth + clone (in this same subshell — PATH/zshrc are if-install.sh's job)
-# ==========================================================================
+done
 
 # Make our just-installed binaries usable for the rest of this run.
+# (PATH/zshrc setup is if-install.sh's job, not ours.)
 export PATH="$IF_HOME/gh/bin:$IF_HOME/git/bin:$PATH"
-# git on Apple Silicon is a Homebrew bottle with @@HOMEBREW_PREFIX@@ baked
-# in; we ship its libs alongside in $IF_HOME/git/lib and resolve via
-# DYLD_FALLBACK_LIBRARY_PATH for any git invocation in this script.
 [ -d "$IF_HOME/git/lib" ] && export DYLD_FALLBACK_LIBRARY_PATH="$IF_HOME/git/lib"
 
-echo ""
+# ==========================================================================
+# Next: signing into github (signpost — only when a manual step is needed)
+# ==========================================================================
 
-# --- gh auth ---
-if gh auth status >/dev/null 2>&1; then
-  printf '%b  github authenticated\n' "${C_GRN}✓${C_RST}"
-else
+if ! gh auth status >/dev/null 2>&1; then
+  echo ""
+  printf '%bNext: signing into github%b\n' "$C_BLD" "$C_RST"
+  echo "This bit involves a manual step from you. Here's what's going to happen.."
   cat <<SIGNPOST
-
-${C_BLD}Next: signing into github${C_RST}
 
   - github will prompt for:
     - where do you use github       ${C_GRAY}<- select github.com${C_RST}
@@ -392,55 +393,56 @@ ${C_BLD}Next: signing into github${C_RST}
   ${C_GRAY}press enter when you're ready${C_RST}
 SIGNPOST
   read -r _ </dev/tty || true
-  echo ""
-  if ! gh auth login </dev/tty; then
-    echo ""
-    die "github sign-in didn't complete"
-  fi
-  echo ""
-  printf '%b  github authenticated\n' "${C_GRN}✓${C_RST}"
 fi
 
-# --- git credential helper ---
-# Idempotent — registers gh as the helper for github.com so plain `git`
-# commands (e.g., `git pull`) authenticate via gh's stored token.
-gh auth setup-git >> "$INSTALL_LOG" 2>&1
+# ==========================================================================
+# The github bit — actual auth + clone (only renders when there's work)
+# ==========================================================================
 
-# --- clone the if repo ---
-if [ -d "$IF_HOME/staging/.git" ]; then
-  printf '%b  if repo present at ~/.if/staging\n' "${C_GRN}✓${C_RST}"
-else
-  printf '%b  cloning almostawake/if\n' "${C_GRAY}⋯${C_RST}"
-  # Capture stderr so we can pattern-match permission failures vs other
-  # errors. gh prints "Could not resolve" / "not found" / "404" for
-  # permission/repo-existence problems, vs git-side errors for dylib /
-  # network / etc. failures.
-  clone_err=$(gh repo clone almostawake/if "$IF_HOME/staging" 2>&1 | tee -a "$INSTALL_LOG")
-  clone_rc=${PIPESTATUS[0]}
-  if [ "$clone_rc" -ne 0 ]; then
-    printf '\033[1A\r\033[K'
-    printf '%b  couldn'\''t clone almostawake/if\n' "${C_RED}✗${C_RST}"
-    echo ""
-    if printf '%s' "$clone_err" | grep -qiE '404|not found|could not resolve host|repository not found|gh repo: name argument required'; then
-      echo "looks like a permissions issue — you may not have been added as"
-      echo "a collaborator yet. request access at https://almostawake.com."
-    else
-      echo "clone failed for a non-permissions reason — see error above and"
-      echo "the log tail below."
+need_login=false
+need_clone=false
+gh auth status >/dev/null 2>&1 || need_login=true
+[ -d "$IF_HOME/staging/.git" ] || need_clone=true
+
+if [ "$need_login" = "true" ] || [ "$need_clone" = "true" ]; then
+  echo ""
+  printf '%bThe github bit%b\n' "$C_BLD" "$C_RST"
+  echo ""
+
+  if [ "$need_login" = "true" ]; then
+    # Filter gh's verbose `- gh config set ...` action line (the ✓ that
+    # follows confirms what happened). awk so empty match doesn't 1-exit.
+    gh auth login </dev/tty 2>&1 | awk '!/^- gh config/'
+    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+      echo ""
+      die "github sign-in didn't complete"
     fi
-    exit 1
   fi
-  printf '\033[1A\r\033[K'
-  printf '%b  if repo cloned to ~/.if/staging\n' "${C_GRN}✓${C_RST}"
+
+  if [ "$need_clone" = "true" ]; then
+    # gh's "Could not resolve" / "not found" / "404" are permission/repo
+    # issues; anything else is dylib/network/etc. — keep that distinction
+    # in the failure message rather than blaming permissions for everything.
+    clone_err=$(gh repo clone almostawake/if "$IF_HOME/staging" 2>&1 | tee -a "$INSTALL_LOG")
+    clone_rc=${PIPESTATUS[0]}
+    if [ "$clone_rc" -ne 0 ]; then
+      echo ""
+      if printf '%s' "$clone_err" | grep -qiE '404|not found|could not resolve host|repository not found'; then
+        echo "looks like a permissions issue — you may not have been added as"
+        echo "a collaborator yet. request access at https://almostawake.com."
+      else
+        echo "clone failed — see error above and the log tail below."
+      fi
+      exit 1
+    fi
+  fi
 fi
 
 # Clear EXIT trap on success — no need to dump the log.
 trap - EXIT
 
 # Hand off to the full installer (lives in the freshly cloned repo).
-# `exec` replaces this process, so the user sees a clean transition
-# rather than two stacked bash contexts. PATH already has gh+git, /dev/tty
-# is still the real terminal — if-install.sh's prompts work as in a
-# regular curl|bash run.
+# `exec` replaces this process so the user sees a clean transition;
+# PATH/dev/tty/env all carry over.
 echo ""
 exec bash "$IF_HOME/staging/scripts/if-install.sh"
