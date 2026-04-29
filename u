@@ -1,4 +1,4 @@
-u#!/bin/bash
+#!/bin/bash
 #
 # TESTING ONLY — wipe 'if' state so the installer can be re-run from scratch.
 # Designed for use inside a VM. Not a production uninstaller (see if-uninstall.sh
@@ -9,6 +9,7 @@ u#!/bin/bash
 #                                                      (node, java, claude, git, gh,
 #                                                      npm-cache, claude-config, creds, ...)
 #   ~/.zshrc                                         — plus any .zshrc.*.bak we've produced
+#   ~/.gitconfig                                     — written by `gh auth setup-git`
 #   ~/.npm/                                          — npm cache (created before
 #                                                      NPM_CONFIG_CACHE takes effect)
 #   ~/.claude/                                       — Claude Code data dir (created
@@ -68,6 +69,7 @@ paths=(
   "$HOME/.claude"
   "$HOME/.claude.json"
   "$HOME/.zshrc"
+  "$HOME/.gitconfig"
   "$HOME/.local/state/gh"
   "$HOME/.config/gh"
   "$HOME/.cache/gh"
