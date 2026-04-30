@@ -15,11 +15,12 @@ set -e
 
 if [ -t 1 ]; then
   C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_GRAY=$'\033[90m'
-  # 256-colour palette index 18 (#000087, dark blue). Matches scripts/lib.
-  # macOS Terminal.app misrenders the truecolor SGR (\033[38;2;...) as
-  # bright magenta, so we use 256-colour mode for portability — every
-  # terminal that handles 256 colours renders index 18 as dark blue.
-  C_BLU=$'\033[38;5;18m'
+  # 256-colour palette index 24 (#005f87, dark cyan-blue). Closest cube
+  # match for Tailwind Cyan-Blue 900 (#0c4a6e) — same depth and cyan
+  # lean. Truecolor (\033[38;2;...) was tried first but Terminal.app
+  # misrenders it as bright magenta, so we use 256-colour mode for
+  # portability. Matches scripts/lib.
+  C_BLU=$'\033[38;5;24m'
   C_BLD=$'\033[1m'; C_RST=$'\033[0m'
 else
   C_RED=""; C_GRN=""; C_GRAY=""; C_BLU=""; C_BLD=""; C_RST=""
