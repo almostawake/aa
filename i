@@ -1,14 +1,15 @@
 #!/bin/bash
 #
-# almostawake.com/install.sh — bootstrap for if (impatient futurist)
+# almostawake.com/i.sh — bootstrap for if (impatient futurist)
 #
-# Installs git and gh into ~/.if/, mirroring scripts/i's contained
-# install convention (no Homebrew). Auth + repo cloning happen later.
+# Installs git and gh into ~/.if/, mirroring
+# scripts/install-dependencies's contained install convention (no
+# Homebrew). Auth + repo cloning happen later.
 #
 set -e
 
 # ==========================================================================
-# Helpers (lifted from scripts/l — inlined because the bootstrap can't
+# Helpers (lifted from scripts/lib — inlined because the bootstrap can't
 # depend on the private repo before it's cloned)
 # ==========================================================================
 
@@ -222,7 +223,7 @@ fi
 log "i: detection done — have_git=$have_git have_gh=$have_gh"
 
 # ==========================================================================
-# Build the install list — same shape as scripts/n's PROV_* arrays.
+# Build the install list — same shape as scripts/setup-project's PROV_* arrays.
 # Already-installed items still appear in the list (rendered green from
 # the start) so the user sees the full picture, not a mystery skip.
 # ==========================================================================
@@ -245,7 +246,7 @@ for x in "${INSTALLED[@]}"; do
 done
 
 # ==========================================================================
-# Row UI (same shape as scripts/n draw_prov_row / update_prov_row)
+# Row UI (same shape as scripts/setup-project draw_prov_row / update_prov_row)
 # ==========================================================================
 
 draw_row() {
@@ -340,7 +341,7 @@ done
 log "i: all install rows finished"
 
 # Make our just-installed binaries usable for the rest of this run.
-# (PATH/zshrc setup is scripts/i's job, not ours.)
+# (PATH/zshrc setup is scripts/install-dependencies's job, not ours.)
 export PATH="$IF_HOME/gh/bin:$IF_HOME/git/bin:$PATH"
 [ -d "$IF_HOME/git/lib" ] && export DYLD_FALLBACK_LIBRARY_PATH="$IF_HOME/git/lib"
 
@@ -351,20 +352,24 @@ export PATH="$IF_HOME/gh/bin:$IF_HOME/git/bin:$PATH"
 if ! gh auth status >/dev/null 2>&1; then
   echo ""
   echo ""
-  heading "Next: signing into github"
+  heading "instructions for the next step: signing into github"
   echo ""
-  echo "This bit involves a manual step from you. Here's what's going to happen.."
+  echo "This bit involves a manual step from you. Here's what's going to happen next and what you need to do .."
   cat <<SIGNPOST
 
   - github will prompt for:
-    - where do you use github       ${C_GRAY}<- select github.com${C_RST}
-    - preferred protocol            ${C_GRAY}<- select https${C_RST}
-    - login method                  ${C_GRAY}<- select login with browser${C_RST}
-  - copy the code github gives you in the terminal
-  - then hit enter to trigger the browser
-  - paste the code when prompted
-  - choose authorize github
-  - return here when it's done
+    - where do you use github                        ${C_GRAY}<- accept github.com${C_RST}
+    - preferred protocol                             ${C_GRAY}<- accept https${C_RST}
+    - authenticate git with ...                      ${C_GRAY}<- accept y${C_RST}
+    - login method                                   ${C_GRAY}<- accept login with browser${C_RST}
+
+  - then log in and connect your account: 
+    - copy the code github gives you in the terminal
+    - then hit enter to trigger the browser
+    - log into your github account
+    - paste the code when prompted
+    - choose authorize github
+    - return here when it's done
 
   ${C_GRAY}press enter when you're ready${C_RST}
 SIGNPOST
@@ -421,9 +426,9 @@ trap - EXIT
 # transition into the bigger install phase).
 echo ""
 echo ""
-heading "Right, now let's install the core technologies you'll be using:"
+heading "Right, now let's install the core technologies you'll be using for your projects:"
 echo ""
 
 # Hand off to the full installer in ~/.if/staging. exec replaces this
 # process so PATH / dev/tty / env carry over cleanly.
-exec bash "$IF_HOME/staging/scripts/i"
+exec bash "$IF_HOME/staging/scripts/install-dependencies"
