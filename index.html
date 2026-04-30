@@ -1,232 +1,333 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>impatient futurist</title>
-  <style>
-    :root {
-      --fg: #333;
-      --fg-muted: #555;
-      --fg-faint: #999;
-      --border: #e0e0e0;
-      --accent: #3949ab;
-      --ok: #070;
-    }
-    body {
-      font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
-      font-size: 15px;
-      line-height: 1.5;
-      color: var(--fg);
-      background: #fff;
-      max-width: 36em;
-      margin: 0 auto 5em;
-      padding: 0 1.5em;
-    }
-    .banner {
-      font-family: inherit;
-      font-weight: 500;
-      font-size: 20px;
-      line-height: 1.1;
-      white-space: pre;
-      margin: 0 0 0 -1ch;
-      color: var(--fg);
-      position: sticky;
-      top: 0;
-      background: #fff;
-      z-index: 10;
-      padding: 2.5em 0 0.5em;
-      border-bottom: 1px solid transparent;
-      transition: border-color 0.2s ease;
-    }
-    .banner.scrolled {
-      border-bottom-color: var(--border);
-    }
-    .banner + * {
-      margin-top: 0.5em;
-    }
-    h1 {
-      color: var(--fg-faint);
-      font-size: 17px;
-      font-weight: 500;
-      margin: 2em 0 0.4em;
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-    }
-    h2 {
-      color: var(--fg-faint);
-      font-size: 17px;
-      font-weight: 500;
-      margin: 2em 0 0.4em;
-      letter-spacing: 0.05em;
-    }
-    p {
-      color: var(--fg-muted);
-      margin: 1em 0;
-    }
-    ul, ol {
-      margin: 0.6em 0 0.6em 1.5em;
-      padding-left: 1.4em;
-      color: var(--fg-muted);
-    }
-    li {
-      margin: 0.2em 0;
-    }
-    a {
-      color: var(--accent);
-      text-decoration: none;
-    }
-    a:hover {
-      text-decoration: underline;
-    }
-    form {
-      margin: 0.8em 0;
-      display: flex;
-      gap: 0.5em;
-      align-items: stretch;
-    }
-    input[type=text],
-    textarea {
-      width: 100%;
-      box-sizing: border-box;
-      font-family: inherit;
-      font-size: 15px;
-      color: var(--fg);
-      background: #fff;
-      border: 1px solid var(--border);
-      border-radius: 3px;
-      padding: 6px 8px;
-      outline: none;
-      flex: 1;
-      min-width: 0;
-    }
-    input[type=text]:focus,
-    textarea:focus {
-      border-color: var(--accent);
-    }
-    textarea {
-      resize: vertical;
-    }
-    button {
-      font-family: inherit;
-      font-size: 15px;
-      padding: 6px 14px;
-      background: var(--fg);
-      color: #fff;
-      border: 1px solid var(--fg);
-      border-radius: 3px;
-      cursor: pointer;
-      flex-shrink: 0;
-      white-space: nowrap;
-    }
-    button:hover {
-      background: #000;
-    }
-    button:disabled {
-      background: #bbb;
-      border-color: #bbb;
-      cursor: not-allowed;
-    }
-    #thanks {
-      color: var(--ok);
-      margin: 1em 0;
-    }
-    .footer {
-      color: var(--fg-faint);
-      font-size: 15px;
-      margin-top: 4em;
-      border-top: 1px solid var(--border);
-      padding-top: 1.5em;
-    }
-  </style>
-</head>
-<body>
-  <div class="banner">┌───────────────────────────────────────────────────┐
-│          welcome, impatient futurist              │
-└───────────────────────────────────────────────────┘</div>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>impatient futurist</title>
+    <style>
+      :root {
+        --fg: #333;
+        --fg-muted: #555;
+        --fg-faint: #999;
+        --border: #e0e0e0;
+        --accent: #3949ab;
+        --ok: #070;
+      }
+      body {
+        font-family:
+          "JetBrains Mono", "Fira Code", "SF Mono", "Cascadia Code", "Consolas",
+          monospace;
+        font-size: 15px;
+        line-height: 1.5;
+        color: var(--fg);
+        background: #fff;
+        max-width: 44em;
+        margin: 0 auto 5em;
+        padding: 0 3em;
+      }
+      .banner {
+        font-family: inherit;
+        font-weight: 500;
+        font-size: 20px;
+        line-height: 1.1;
+        white-space: pre;
+        width: fit-content;
+        margin: 0 auto;
+        color: var(--fg);
+        position: sticky;
+        top: 0;
+        background: #fff;
+        z-index: 10;
+        padding: 50px 0 40px;
+      }
+      .banner::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 30px;
+        border-bottom: 1px solid transparent;
+        transition: border-color 0.2s ease;
+      }
+      .banner.scrolled::after {
+        border-bottom-color: var(--border);
+      }
+      .banner + * {
+        margin-top: 10px;
+      }
+      @media (max-width: 600px) {
+        body {
+          padding: 0 0.5em;
+        }
+      }
+      h1 {
+        color: var(--fg);
+        font-size: 17px;
+        font-weight: 500;
+        margin: 2em 0 0.4em;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+      h2 {
+        color: var(--fg);
+        font-size: 17px;
+        font-weight: 500;
+        margin: 2em 0 0.4em;
+        letter-spacing: 0.05em;
+      }
+      p {
+        color: var(--fg-muted);
+        margin: 1em 0;
+      }
+      b,
+      strong {
+        color: var(--fg);
+      }
+      ul,
+      ol {
+        margin: 0.6em 0 0.6em 1.5em;
+        padding-left: 1.4em;
+        color: var(--fg-muted);
+      }
+      li {
+        margin: 0.2em 0;
+      }
+      a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      form {
+        margin: 0.8em 0;
+        display: flex;
+        gap: 0.5em;
+        align-items: stretch;
+      }
+      input[type="text"],
+      textarea {
+        width: 100%;
+        box-sizing: border-box;
+        font-family: inherit;
+        font-size: 15px;
+        color: var(--fg);
+        background: #fff;
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        padding: 6px 8px;
+        outline: none;
+        flex: 1;
+        min-width: 0;
+      }
+      input[type="text"]:focus,
+      textarea:focus {
+        border-color: var(--accent);
+      }
+      textarea {
+        resize: vertical;
+      }
+      button {
+        font-family: inherit;
+        font-size: 15px;
+        padding: 6px 14px;
+        background: var(--fg);
+        color: #fff;
+        border: 1px solid var(--fg);
+        border-radius: 3px;
+        cursor: pointer;
+        flex-shrink: 0;
+        white-space: nowrap;
+      }
+      button:hover {
+        background: #000;
+      }
+      button:disabled {
+        background: #bbb;
+        border-color: #bbb;
+        cursor: not-allowed;
+      }
+      #thanks {
+        color: var(--ok);
+        margin: 1em 0;
+      }
+      .footer {
+        color: var(--fg-faint);
+        font-size: 15px;
+        margin-top: 4em;
+        border-top: 1px solid var(--border);
+        padding-top: 1.5em;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- prettier-ignore -->
+    <div class="banner">┌─────────────────────────────┐
+│ welcome, impatient futurist │
+└─────────────────────────────┘</div>
 
-  <p>we are a referral-only community of non-developers shipping personal and small business automation <b>solutions</b> using claude code (pro/max)</p>
-  <p>if you've done the math on where your corporate job will be in five years — and you'd rather build your ai skills and a small side hustle now, while you've still got a steady paycheck — then you're in the right place</p>
+    <p>
+      we are a referral-only community of non-developers shipping personal and
+      small business automation <b>solutions</b> using claude code (pro/max)
+    </p>
+    <p>
+      if you've done the math on where your corporate job will be in five years
+      — and you'd rather build your ai skills and a small side hustle now, while
+      you've still got a steady paycheck — then you're in the right place
+    </p>
 
-  <h1>we help in 3 ways:</h1>
-  <ol>
-    <li><b>slingshot start</b> .. the biggest barrier to ai-assisted development is setup - we automate your setup and preset the security boundaries and cloud technologies that'll help you succeed</li>
-    <li><b>ai guiderails</b> .. claude will give you way better outcomes because we provide a bunch of common preset code templates for claude to build the things you need to do most often - plus we give claude specific guidance on what to do (and not to do)</li>
-    <li><b>comraderie</b> .. being amongst like-minded builders who love solving real-world problems with tech solutions means you're no longer alone in the dark - and we offer in-person training courses if you want an initial boost (ah, the irony)</li>
-  </ol>
+    <h1>we help in 3 ways:</h1>
+    <ol>
+      <li>
+        <b>slingshot start</b> .. the biggest barrier to ai-assisted development
+        is setup - we automate your setup and preset the security boundaries and
+        cloud technologies that'll help you succeed
+      </li>
+      <li>
+        <b>ai guiderails</b> .. claude will give you way better outcomes because
+        we provide a bunch of common preset code templates for claude to build
+        the things you need to do most often - plus we give claude specific
+        guidance on what to do (and not to do)
+      </li>
+      <li>
+        <b>comraderie</b> .. being amongst like-minded builders who love solving
+        real-world problems with tech solutions means you're no longer alone in
+        the dark - and we offer in-person training courses (ah, the irony) if
+        you want an initial boost
+      </li>
+    </ol>
 
-  <h1>our security philosophy (important)</h1>
+    <h1>our security philosophy (important)</h1>
 
-  <p><em>andrew trusts anthropic's "public benefit corporation" status, but he understands that most people feel uneasy about ai security in general</em></p>
-  <p>the best results for building with claude's assistance come from working in "yolo" mode, where it has the "god" privileges to consider and do more things on your behalf</p>
-  <p>this comes with the risk that claude could deliberately or inadvertently damage your junk </p>
-  <p>this seems like a conundrum but actually there's a way to achieve both: just keep your personal junk totally separate from your building (claude) junk. this is actually pretty simple to achieve if we:</p>
+    <p>
+      <em
+        >andrew trusts anthropic's "public benefit corporation" status, but he
+        understands that most people feel uneasy about ai security in
+        general</em
+      >
+    </p>
+    <p>
+      the best results for building with claude's assistance come from working
+      in "yolo" mode, where it has the "god" privileges to consider and do more
+      things on our behalf
+    </p>
+    <p>
+      this comes with the risk that claude could deliberately or inadvertently
+      damage our junk
+    </p>
+    <p>
+      this seems like a conundrum but actually there's a way to achieve both:
+      just keep the personal junk totally separate from the "building" junk.
+      this is actually pretty simple to achieve if we:
+    </p>
 
     <ul>
-    <li>enable google cloud free trial on your dedicated gmail (<a href="https://console.cloud.google.com/freetrial" target="_blank">console.cloud.google.com/freetrial</a>)</li>
-    <li>create a dedicated macos user account on the machine you'll run if from</li>
-  </ul>
-  
+      <li>
+        have a separate <b>login identity</b> from our personal account - we
+        <b>STRONGLY</b> recommend registering a new, totally separate gmail
+        address for this
+      </li>
+      <li>
+        create a <b>separate low-privilege account</b> on your machine, so
+        claude can't see any of your personal junk in your normal account
+      </li>
+      <li>
+        install all our software <b>locally to the low-privilege user</b> so
+        that it has zero impact and you can delete it in a few seconds, no
+        impact
+      </li>
+    </ul>
+
     <h1>prerequisites</h1>
 
-  <ol>
-    <li><b>glass half full</b> .. </li>
-    <li><b>mac</b> .. sorry. andrew's brother nick is working on a windows variant of everything, but it's a huge investment in time, so we're not setting a date for it. honestly, if you're keen go and buy a second hand macbook air (apple silicon), it's totes worth the outlay. andrew uses a 2023 macbook air M2 with 16gb ram and it's never been slow</li>
-    <li><b>comraderie</b> .. being amongst like-minded builders who love solving real-world problems with tech solutions means you're no longer alone in the dark - and we offer in-person training courses if you want an initial boost (ah, the irony)</li>
-  </ol>
+    <ol>
+      <li>
+        <b>mac</b> .. sorry. andrew's brother nick is working on a windows
+        variant of everything, but it's a huge investment in time, so we're not
+        setting a date for it. honestly, if you're keen go and buy a second hand
+        macbook air (apple silicon), it's totes worth the outlay. andrew uses a
+        2023 macbook air M2 with 16gb ram and it's never been slow
+      </li>
+    </ol>
 
-  <form id="signup" novalidate>
-    <input id="username" type="text" placeholder="your github username here" autocomplete="off" spellcheck="false" required aria-label="github username">
-    <button type="submit">request access</button>
-  </form>
+    <h1>request access</h1>
 
-  <div id="thanks" hidden>
-    ✓ got it. you'll get an email from github when you've been added.
-  </div>
+    <p>If this sounds like fun then submit your github username here. if you don't have one, sign up - it's free.</p>
 
-  <h1>what happens next</h1>
-  <p>
-    once approved, github emails you an invite to the repo. accept it,
-    open the repo, and follow the readme.
-  </p>
+    <form id="signup" novalidate>
+      <input
+        id="username"
+        type="text"
+        placeholder="your github username here"
+        autocomplete="off"
+        spellcheck="false"
+        required
+        aria-label="github username"
+      />
+      <button type="submit">request access</button>
+    </form>
 
-  <h1>while you wait, you can</h1>
-  <ul>
-    <li>enable google cloud free trial on your dedicated gmail (<a href="https://console.cloud.google.com/freetrial" target="_blank">console.cloud.google.com/freetrial</a>)</li>
-    <li>create a dedicated macos user account on the machine you'll run if from</li>
-  </ul>
+    <div id="thanks" hidden>
+      ✓ got it. you'll get an email from github when you've been added. in the meantime - go ahead and get 
+    </div>
 
-  <p class="footer">questions? <a href="mailto:andrew@almostawake.com">andrew@almostawake.com</a></p>
+    <h1>what happens next</h1>
+    <p>
+      once approved, you'll get an invitation from github.  accept that and follow the instructions in the "readme"
+    </p>
 
-  <script>
-    var banner = document.querySelector('.banner');
-    var onScroll = function() {
-      banner.classList.toggle('scrolled', window.scrollY > 4);
-    };
-    window.addEventListener('scroll', onScroll, { passive: true });
-    onScroll();
+    <h1>while you wait, you can</h1>
+    <ul>
+      <li>
+        enable google cloud free trial on your dedicated gmail (<a
+          href="https://console.cloud.google.com/freetrial"
+          target="_blank"
+          >console.cloud.google.com/freetrial</a
+        >)
+      </li>
+      <li>
+        create a dedicated macos user account on the machine you'll run if from
+      </li>
+    </ul>
 
-    document.getElementById('signup').addEventListener('submit', async function(e) {
-      e.preventDefault();
-      var username = document.getElementById('username').value.trim();
-      if (!username) return;
-      var btn = e.target.querySelector('button');
-      btn.disabled = true;
-      btn.textContent = 'sending…';
-      try {
-        var resp = await fetch('https://ntfy.sh/if-signup-request', {
-          method: 'POST',
-          body: username
+    <p class="footer">
+      questions?
+      <a href="mailto:andrew@almostawake.com">andrew@almostawake.com</a>
+    </p>
+
+    <script>
+      var banners = document.querySelectorAll(".banner");
+      var onScroll = function () {
+        banners.forEach(function (b) {
+          b.classList.toggle("scrolled", window.scrollY > 4);
         });
-        if (!resp.ok) throw new Error('ntfy ' + resp.status);
-        document.getElementById('signup').hidden = true;
-        document.getElementById('thanks').hidden = false;
-      } catch (err) {
-        btn.disabled = false;
-        btn.textContent = 'request access';
-        alert('that failed (' + err.message + '). try again?');
-      }
-    });
-  </script>
-</body>
+      };
+      window.addEventListener("scroll", onScroll, { passive: true });
+      onScroll();
+
+      document
+        .getElementById("signup")
+        .addEventListener("submit", async function (e) {
+          e.preventDefault();
+          var username = document.getElementById("username").value.trim();
+          if (!username) return;
+          var btn = e.target.querySelector("button");
+          btn.disabled = true;
+          btn.textContent = "sending…";
+          try {
+            var resp = await fetch("https://ntfy.sh/if-signup-request", {
+              method: "POST",
+              body: username,
+            });
+            if (!resp.ok) throw new Error("ntfy " + resp.status);
+            document.getElementById("signup").hidden = true;
+            document.getElementById("thanks").hidden = false;
+          } catch (err) {
+            btn.disabled = false;
+            btn.textContent = "request access";
+            alert("that failed (" + err.message + "). try again?");
+          }
+        });
+    </script>
+  </body>
 </html>
