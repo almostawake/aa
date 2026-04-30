@@ -15,10 +15,11 @@ set -e
 
 if [ -t 1 ]; then
   C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_GRAY=$'\033[90m'
-  # Truecolor indigo (#1a237e, Material Indigo 900). Matches scripts/lib
-  # so headings rendered by aa/i and scripts/install-dependencies look
-  # identical in the user's terminal.
-  C_BLU=$'\033[38;2;26;35;126m'
+  # 256-colour palette index 18 (#000087, dark blue). Matches scripts/lib.
+  # macOS Terminal.app misrenders the truecolor SGR (\033[38;2;...) as
+  # bright magenta, so we use 256-colour mode for portability — every
+  # terminal that handles 256 colours renders index 18 as dark blue.
+  C_BLU=$'\033[38;5;18m'
   C_BLD=$'\033[1m'; C_RST=$'\033[0m'
 else
   C_RED=""; C_GRN=""; C_GRAY=""; C_BLU=""; C_BLD=""; C_RST=""
@@ -36,6 +37,32 @@ prompt_yn() {
   [ -z "$answer" ] && answer="$def"
   case "$answer" in [Yy]*) return 0 ;; *) return 1 ;; esac
 }
+
+# ==========================================================================
+# Welcome screen + opt-in. Nothing on disk changes before "Y".
+# ==========================================================================
+
+cat <<BANNER
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                     welcome, impatient futurist                     │
+└─────────────────────────────────────────────────────────────────────┘
+
+BANNER
+
+cat <<PLAN
+Let's save you a few months of pain and suffering by installing
+everything you need in a couple of minutes. When we're done you'll
+be able to kick off your first project, which will be live in
+another few minutes.
+
+PLAN
+
+if ! prompt_yn "Ready to go?" "Y"; then
+  say ""
+  say "no changes made. goodbye."
+  exit 0
+fi
 
 detect_os_arch() {
   case "$(uname -s)" in
@@ -274,36 +301,6 @@ update_row() {
     printf '\033[%dB\r' "$down"
   fi
 }
-
-# ==========================================================================
-# Banner
-# ==========================================================================
-
-cat <<BANNER
-
-┌───────────────────────────────────────────────────┐
-│            welcome, impatient futurist            │
-└───────────────────────────────────────────────────┘
-
-BANNER
-
-cat <<PLAN
-Let's save you a few months of pain and suffering by installing
-everything you need in a couple of minutes. When we're done you'll
-be able to kick off your first project, which will be live in
-another few minutes.
-
-PLAN
-
-log "i: prompting Ready to go?"
-if ! prompt_yn "Ready to go?" "Y"; then
-  log "i: user declined"
-  say ""
-  say "no changes made. goodbye."
-  trap - EXIT
-  exit 0
-fi
-log "i: user accepted"
 
 # ==========================================================================
 # First: install git + gh
