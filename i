@@ -282,7 +282,7 @@ update_row() {
 cat <<BANNER
 
 ┌───────────────────────────────────────────────────┐
-│          welcome, impatient futurist (if)         │
+│            welcome, impatient futurist            │
 └───────────────────────────────────────────────────┘
 
 BANNER
