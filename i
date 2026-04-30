@@ -14,13 +14,14 @@ set -e
 # ==========================================================================
 
 if [ -t 1 ]; then
-  C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_GRAY=$'\033[90m'
-  # 256-colour palette index 24 (#005f87, dark cyan-blue). Closest cube
-  # match for Tailwind Cyan-Blue 900 (#0c4a6e) — same depth and cyan
-  # lean. Truecolor (\033[38;2;...) was tried first but Terminal.app
-  # misrenders it as bright magenta, so we use 256-colour mode for
-  # portability. Matches scripts/lib.
-  C_BLU=$'\033[38;5;24m'
+  C_RED=$'\033[31m'; C_GRAY=$'\033[90m'
+  # 256-colour palette indices, chosen for matched depth on a light
+  # terminal. Truecolor (\033[38;2;...) was tried but Terminal.app
+  # misrenders it as bright magenta, so we use 256-colour mode.
+  #   blue  = idx 17 (#00005f, deep navy / midnight blue)
+  #   green = idx 22 (#005f00, dark forest green — same depth as blue)
+  C_BLU=$'\033[38;5;17m'
+  C_GRN=$'\033[38;5;22m'
   C_BLD=$'\033[1m'; C_RST=$'\033[0m'
 else
   C_RED=""; C_GRN=""; C_GRAY=""; C_BLU=""; C_BLD=""; C_RST=""
