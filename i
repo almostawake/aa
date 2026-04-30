@@ -15,10 +15,10 @@ set -e
 
 if [ -t 1 ]; then
   C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_GRAY=$'\033[90m'
-  # Truecolor dark blue (#0d47a1, Material Blue 800). Matches scripts/lib
+  # Truecolor indigo (#1a237e, Material Indigo 900). Matches scripts/lib
   # so headings rendered by aa/i and scripts/install-dependencies look
   # identical in the user's terminal.
-  C_BLU=$'\033[38;2;13;71;161m'
+  C_BLU=$'\033[38;2;26;35;126m'
   C_BLD=$'\033[1m'; C_RST=$'\033[0m'
 else
   C_RED=""; C_GRN=""; C_GRAY=""; C_BLU=""; C_BLD=""; C_RST=""
