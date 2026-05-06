@@ -10,8 +10,7 @@
         --fg-muted: #555;
         --fg-faint: #999;
         --border: #e0e0e0;
-        --accent: midnightblue;
-        --ok: #070;
+        --accent: #333;
       }
       body {
         font-family:
@@ -32,7 +31,7 @@
         line-height: 1.1;
         white-space: pre;
         text-align: center;
-        color: midnightblue;
+        color: #333;
         position: sticky;
         top: 0;
         background: #fff;
@@ -67,12 +66,10 @@
         }
       }
       h1 {
-        color: midnightblue;
-        font-size: 14px;
+        color: #333;
+        font-size: 16px;
         font-weight: 700;
         margin: 2em 0 0.4em;
-        letter-spacing: 0.05em;
-        text-transform: uppercase;
       }
       h2 {
         color: var(--fg);
@@ -98,65 +95,17 @@
       li {
         margin: 0.2em 0;
       }
+      li ul {
+        list-style-type: disc;
+      }
       a {
         color: var(--accent);
-        text-decoration: none;
+        text-decoration: underline;
+        text-decoration-thickness: 1px;
+        text-underline-offset: 3px;
       }
       a:hover {
-        text-decoration: underline;
-      }
-      form {
-        margin: 0.8em 0;
-        display: flex;
-        gap: 0.5em;
-        align-items: stretch;
-      }
-      input[type="text"],
-      textarea {
-        width: 100%;
-        box-sizing: border-box;
-        font-family: inherit;
-        font-size: 14px;
-        color: var(--fg);
-        background: #fff;
-        border: 1px solid var(--border);
-        border-radius: 3px;
-        padding: 6px 8px;
-        outline: none;
-        flex: 1;
-        min-width: 0;
-      }
-      input[type="text"]:focus,
-      textarea:focus {
-        border-color: var(--accent);
-      }
-      textarea {
-        resize: vertical;
-      }
-      button {
-        font-family: inherit;
-        font-size: 14px;
-        padding: 6px 14px;
-        background: midnightblue;
-        color: #fff;
-        border: 1px solid midnightblue;
-        border-radius: 3px;
-        cursor: pointer;
-        flex-shrink: 0;
-        white-space: nowrap;
-      }
-      button:hover {
-        background: #000040;
-        border-color: #000040;
-      }
-      button:disabled {
-        background: #bbb;
-        border-color: #bbb;
-        cursor: not-allowed;
-      }
-      #thanks {
-        color: var(--ok);
-        margin: 1em 0;
+        text-decoration-thickness: 2px;
       }
       .footer {
         color: var(--fg-faint);
@@ -174,8 +123,9 @@
 └─────────────────────────────────────┘</div>
 
     <p>
-      we are a referral-only community of non-developers shipping personal and
-      small business automation <b>solutions</b> using claude code (pro/max)
+      we are a (initially referral-only) community of non-developers building
+      personal and small business automation <b>solutions</b> using claude code
+      (paid) in the evenings and on weekends around our work commitments
     </p>
     <p>
       if you've done the math on where your corporate job will be in five years
@@ -187,20 +137,23 @@
     <ol>
       <li>
         <b>slingshot start</b> .. the biggest barrier to ai-assisted development
-        is setup - we automate your setup and preset the security boundaries and
-        cloud technologies that'll help you succeed
+        is setup. we automate your one-time and per-project setups in accordance
+        with the philosophy described below. we pre-choose technologies,
+        provision cloud resources (using your gmail free credits) and copy a
+        template app. we even deploy it for you, so you don't have to fumble
+        around in the dark
       </li>
       <li>
-        <b>ai guiderails</b> .. claude will give you way better outcomes because
+        <b>ai guiderails</b> .. claude will deliver way better outcomes because
         we provide a bunch of common preset code templates for claude to build
         the things you need to do most often - plus we give claude specific
-        guidance on what to do (and not to do)
+        guidance on what to do (and what not to do)
       </li>
       <li>
         <b>comraderie</b> .. being amongst like-minded builders who love solving
-        real-world problems with tech solutions means you're no longer alone in
-        the dark - and we offer in-person training courses (ah, the irony) if
-        you want an initial boost
+        real-world problems with tech solutions means you're no longer alone -
+        and we offer in-person training courses (ah, the irony) if you want an
+        initial boost
       </li>
     </ol>
 
@@ -223,81 +176,128 @@
       damage our junk
     </p>
     <p>
-      this seems like a conundrum but actually there's a way to achieve both:
-      just keep the personal junk totally separate from the "building" junk.
-      this is actually pretty simple to achieve if we:
+      this seems like a conundrum but actually there's a way to achieve both: we
+      just keep our personal stuff totally separate from the sandbox where we're
+      playing with ai. this is actually pretty simple to achieve if we:
     </p>
 
     <ul>
       <li>
-        have a separate <b>login identity</b> from our personal account - we
-        <b>STRONGLY</b> recommend registering a new, totally separate gmail
-        address for this
+        create a <b>dedicated gmail account</b> for your initial learning
+        journey with claude. this avoids the gnarly worry when you want to give
+        your app access to a calender or gmail but feel uncomfortable giving
+        carte-blanche to your personal data. this way claude has (and you have)
+        free reign in an empty account
       </li>
       <li>
-        create a <b>separate low-privilege account</b> on your mac, so
-        claude can't see any of your personal junk in your normal account
-      </li>
-      <li>
-        install all our software <b>locally to the low-privilege user</b> so
-        that it has zero impact and you can delete it in a few seconds, no
-        impact
+        create a <b>dedicated mac user</b> (without admin rights) on your local
+        machine, so claude can't see any of your personal data. this way claude
+        and your apps can't install anything globally and can't see outside the
+        sandbox.
       </li>
     </ul>
 
-    <h1>prerequisites</h1>
+    <h1>you'll need a mac</h1>
 
     <p>
-      <b>mac</b> .. sorry. if you only have windows at home, then you'll need to
-      consider a second hand mac (apple silicon). the good news is you will be
-      fine with low spec. andrew uses a 2023 macbook air M2 with 16gb ram and
-      it's never been slow
+      sorry. if you only have windows at home then you'll need to consider a
+      second hand mac (apple silicon). the good news is you will be fine with
+      low spec. andrew uses a 2023 macbook air M2 with 16gb ram and it's never
+      been slow
     </p>
 
-    <h1>step 1: request access</h1>
+    <h1>before you start</h1>
 
-    <p>
-      If this sounds like fun then submit your github username here. if you
-      don't have one, sign up - it's free.
-    </p>
+    <p>these one-time steps can't be automated</p>
 
-    <form id="signup" novalidate>
-      <input
-        id="username"
-        type="text"
-        placeholder="your github username here"
-        autocomplete="off"
-        spellcheck="false"
-        required
-        aria-label="github username"
-      />
-      <button type="submit">request access</button>
-    </form>
-
-    <div id="thanks" hidden>
-      ✓ got it. you'll get an email from github when you've been added. in the
-      meantime - go ahead and get
-    </div>
-
-    <h1>what happens next</h1>
-    <p>
-      once approved, you'll get an invitation from github. accept that and
-      follow the instructions in the "readme"
-    </p>
-
-    <h1>step 2: set up prerequisites (non technical)</h1>
-    <ul>
+    <ol>
       <li>
-        enable google cloud free trial on your dedicated gmail (<a
-          href="https://console.cloud.google.com/freetrial"
-          target="_blank"
-          >console.cloud.google.com/freetrial</a
-        >)
+        <b>sign up for a new gmail account</b>
+        <ul>
+          <li>important .. <b>don't reuse your personal account</b></li>
+          <li>
+            you'll have more freedom to use email, calendars, drive etc if it's
+            a dedicated, separate account
+          </li>
+          <li>
+            plus - you'll get <b>new</b> ~ AUD $400 free credits for google
+            cloud<br />
+            .. not that you'll need them
+          </li>
+          <li>
+            if google refuses you mobile verification with "used too many times"
+            consider a one-time $15 sim. you don't need to use this number
+            post-registration
+          </li>
+        </ul>
       </li>
       <li>
-        create a dedicated macos user account on the machine you'll run if from
+        <b>accept google cloud terms &amp; activate free trial</b><br />
+        <p>
+          <em>
+            if you have opted to re-use an old gmail account, you'll have to
+            muddle through the process of accepting terms and enabling billing
+            in google cloud <b>instead of these steps</b>. don't worry, you're
+            not going to be incurring significant costs
+          </em>
+        </p>
+        <ul>
+          <li>use an incognito window with no google accounts signed in</li>
+          <li>
+            go here:
+            <a href="https://console.cloud.google.com" target="_blank"
+              >console.cloud.google.com</a
+            >
+          </li>
+          <li>set up 2fa if prompted</li>
+          <li>accept terms</li>
+          <li>call it anything you want, we'll be deleting it in a sec</li>
+          <li>leave everything else off (dev program, gemini, analytics..)</li>
+          <li>
+            when that's done delete the project<br />
+            settings (top-left) -> general -> delete project (bottom)
+          </li>
+        </ul>
       </li>
-    </ul>
+      <li>
+        <b>accept firebase terms</b>
+        <ul>
+          <li>use the same incognito window from above</li>
+          <li>
+            go here:
+            <a href="https://console.firebase.google.com" target="_blank"
+              >console.firebase.google.com</a
+            >
+          </li>
+          <li>get started / create new</li>
+          <li>accept terms</li>
+          <li>call it anything you want, we'll be deleting it in a sec</li>
+          <li>
+            leave all switches/choices off (developer program, gemini, analytics
+            etc)
+          </li>
+          <li>
+            when that's done delete the project<br />
+            settings (top-left) -> general -> delete project (bottom)
+          </li>
+        </ul>
+      </li>
+      <li>
+        <b>on your mac create a new (standard) user called "if"</b>
+        <ul>
+          <li>important .. <b>later setup won't work without this</b></li>
+          <li>system settings -&gt; users &amp; groups -&gt; add user</li>
+          <li>type: <b>standard</b>, account name: <b>if</b></li>
+          <li>
+            optional: system settings -&gt; menu bar -&gt; fast user switching
+          </li>
+          <li>then switch to the new user</li>
+          <li>
+            <em>resist tweaking/installing stuff until after setup runs</em>
+          </li>
+        </ul>
+      </li>
+    </ol>
 
     <p class="footer">
       questions?
@@ -313,30 +313,6 @@
       };
       window.addEventListener("scroll", onScroll, { passive: true });
       onScroll();
-
-      document
-        .getElementById("signup")
-        .addEventListener("submit", async function (e) {
-          e.preventDefault();
-          var username = document.getElementById("username").value.trim();
-          if (!username) return;
-          var btn = e.target.querySelector("button");
-          btn.disabled = true;
-          btn.textContent = "sending…";
-          try {
-            var resp = await fetch("https://ntfy.sh/if-signup-request", {
-              method: "POST",
-              body: username,
-            });
-            if (!resp.ok) throw new Error("ntfy " + resp.status);
-            document.getElementById("signup").hidden = true;
-            document.getElementById("thanks").hidden = false;
-          } catch (err) {
-            btn.disabled = false;
-            btn.textContent = "request access";
-            alert("that failed (" + err.message + "). try again?");
-          }
-        });
     </script>
   </body>
 </html>
