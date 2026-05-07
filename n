@@ -56,9 +56,10 @@ if [ -t 1 ]; then
   #   green = idx 22 (#005f00, dark forest green — matched depth to blue)
   C_BLU=$'\033[38;5;17m'
   C_GRN=$'\033[38;5;22m'
+  C_YEL=$'\033[33m'
   C_BLD=$'\033[1m'; C_RST=$'\033[0m'
 else
-  C_RED=""; C_GRN=""; C_GRAY=""; C_BLU=""; C_BLD=""; C_RST=""
+  C_RED=""; C_GRN=""; C_GRAY=""; C_BLU=""; C_YEL=""; C_BLD=""; C_RST=""
 fi
 
 say()     { printf '%s\n' "$*"; }
@@ -239,24 +240,25 @@ for x in "${INSTALLED[@]}"; do [ "$x" = "false" ] && N_TODO=$((N_TODO + 1)); don
 # First-time only. Re-runs (N_TODO == 0) skip straight to project setup.
 
 if [ "$N_TODO" -gt 0 ]; then
-  cat <<BANNER
-
-${C_BLD}${C_BLU}┌─────────────────────────────────────────────────────────────────────┐
-│                     welcome, impatient futurist                     │
-└─────────────────────────────────────────────────────────────────────┘${C_RST}
-
-BANNER
-  cat <<PLAN
-Let's save you a few months of pain and suffering by installing
-everything you need in a couple of minutes. When we're done you'll
-be able to kick off your first project, which will be live in
-another few minutes.
-
-PLAN
-  if ! prompt_yn "Ready to go?" "Y"; then
-    say ""
-    say "no changes made. goodbye."
-    exit 0
+  echo ""
+  echo "Let's get you set up.  BUT FIRST ..."
+  echo ""
+  printf "${C_BLD}${C_YEL}═══════════════════════════════ WARNING ═══════════════════════════════${C_RST}\n"
+  echo ""
+  printf "${C_BLD}read the following warning and accept only if you're comfortable:${C_RST}\n"
+  echo ""
+  echo "  1. these tools are for hobby purposes, not to be used at work"
+  echo "  2. you should avoid storing sensitive data there until your"
+  echo "     security skills mature"
+  echo "  3. you should use separate mac and gmail accounts to normal"
+  echo ""
+  printf "${C_BLD}${C_YEL}═══════════════════════════════════════════════════════════════════════${C_RST}\n"
+  echo ""
+  printf "do you understand (yes/NO) "
+  read -r _ack </dev/tty || _ack=""
+  if [ "$_ack" != "yes" ]; then
+    echo ""
+    die "you need to type 'yes' (literally) to accept the warning. no changes made."
   fi
 fi
 
