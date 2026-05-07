@@ -253,12 +253,12 @@ if [ "$N_TODO" -gt 0 ]; then
   echo ""
   echo "═══════════════════════════════════════════════════════════════════════"
   echo ""
-  printf "do you understand (yes/NO) "
-  read -r _ack </dev/tty || _ack=""
-  if [ "$_ack" != "yes" ]; then
-    echo ""
-    die "you need to type 'yes' (literally) to accept the warning. no changes made."
-  fi
+  while true; do
+    printf "do you understand (yes/NO) "
+    read -r _ack </dev/tty || _ack=""
+    [ "$_ack" = "yes" ] && break
+    printf "${C_RED}✗  type 'yes' (literally) to accept the warning${C_RST}\n\n"
+  done
 fi
 
 # =====================================================================
