@@ -929,13 +929,6 @@ fi
 # dead paths.
 _write_zshrc >> "$INSTALL_LOG" 2>&1 || true
 
-if [ "$N_TODO" -gt 0 ]; then
-  echo ""
-  heading "one-time setup done"
-  echo ""
-  printf "Your machine is ready for building.  sweeet. \n"
-fi
-
 # =====================================================================
 # 10. SIGN IN (via template stage + cmd-auth.mjs)
 # =====================================================================
@@ -944,17 +937,14 @@ fi
 # ~/.if/template-stage/.env.auth.json — we copy it into the final
 # project dir later (cp not mv, so future `n` runs reuse the cached
 # token and skip browser consent).
+#
+# cmd-auth.mjs prints its own progress to stderr ("opening browser…",
+# "✓ signed in as …"), so for first-runs the user sees what's
+# happening; for cached-cred re-runs it's silent.
 
 echo ""
+echo "setting up new project"
 echo ""
-heading "let's set up a new project"
-echo ""
-echo "Next you'll give access to a dedicated gmail account so claude"
-echo "can administer things in that account on your behalf. Sign in"
-echo "with that account in the browser when prompted."
-echo ""
-printf "press enter to continue\n"
-read -r _ </dev/tty 2>/dev/null || true
 echo ""
 
 stage_template() {
@@ -1081,8 +1071,15 @@ wait_for_op() {
   return 1
 }
 
+# Extract a JSON error.message from an API response body. Empty
+# string on parse failure. Used to surface verbatim Google errors so
+# the user sees the real reason instead of a generic "HTTP 403".
+_extract_error_message() {
+  perl -MJSON::PP -e 'eval { my $j = decode_json(do { local $/; <STDIN> }); print $j->{error}{message} // $j->{response}{error}{message} // ""; 1 } or print ""'
+}
+
 # Create a GCP project and wait for the LRO. Prints one of:
-#   ok | taken | timeout | err<code>
+#   ok | taken | quota | timeout | err:<verbatim message>
 create_project() {
   local pid="$1"
   local tmp; tmp=$(mktemp)
@@ -1094,17 +1091,26 @@ create_project() {
     -d "{\"projectId\":\"$pid\",\"displayName\":\"$pid\"}" \
     "https://cloudresourcemanager.googleapis.com/v3/projects")
   local body; body=$(cat "$tmp"); rm -f "$tmp"
-  http_log "create_project $pid → HTTP $code"
+  http_log "create_project $pid → HTTP $code body: $(log_trunc "$body")"
 
   if [ "$code" = "409" ] || printf '%s' "$body" | grep -qi 'already.*exists\|ALREADY_EXISTS'; then
     printf '%s' "taken"; return
   fi
+  if printf '%s' "$body" | grep -qiE 'RESOURCE_EXHAUSTED|maximum.*number.*of.*projects|project.*limit|quota'; then
+    printf '%s' "quota"; return
+  fi
   if [ "$code" != "200" ] && [ "$code" != "201" ]; then
-    printf 'err%s' "$code"; return
+    local msg
+    msg=$(printf '%s' "$body" | _extract_error_message)
+    [ -z "$msg" ] && msg="HTTP $code: $(log_trunc "$body")"
+    printf 'err:%s' "$msg"; return
   fi
 
   local op_name; op_name=$(op_name_from "$body")
-  [ -z "$op_name" ] && { printf '%s' "err-noop"; return; }
+  if [ -z "$op_name" ]; then
+    printf 'err:no operation name in create response: %s' "$(log_trunc "$body")"
+    return
+  fi
 
   local i resp
   for i in $(seq 1 60); do
@@ -1116,7 +1122,14 @@ create_project() {
         if printf '%s' "$resp" | grep -qi 'already.*exists\|ALREADY_EXISTS'; then
           printf '%s' "taken"; return
         fi
-        printf '%s' "err-op-failed"; return
+        if printf '%s' "$resp" | grep -qiE 'RESOURCE_EXHAUSTED|maximum.*number.*of.*projects|project.*limit|quota'; then
+          printf '%s' "quota"; return
+        fi
+        local msg
+        msg=$(printf '%s' "$resp" | _extract_error_message)
+        [ -z "$msg" ] && msg="$(log_trunc "$resp")"
+        printf 'err:%s' "$msg"
+        return
       fi
       printf '%s' "ok"; return
     fi
@@ -1666,47 +1679,57 @@ provision_all() {
   return 0
 }
 
+# Same redraw-in-place pattern as the warning loop:
+#   - bad input → ✗ error(s) on the line(s) below; cursor jumps back up to the
+#     prompt line and erases it so the next iteration prompts cleanly. Errors
+#     stay visible underneath as a hint.
+#   - success → spinner overwrites the prompt line, then "✓ <pid> created"
+#     overwrites the spinner. The prompt line BECOMES the first bullet of the
+#     provisioning row UI; provision_all draws its own rows directly below.
 prompt_create_project() {
   PID=""
-  local tried_names=() candidate result joined e
+  local candidate result e msg n_err
   while [ -z "$PID" ]; do
-    if [ ${#tried_names[@]} -gt 0 ]; then
-      joined=$(printf "%s, " "${tried_names[@]}")
-      joined="${joined%, }"
-      printf "already tried: %s\n" "$joined"
-    fi
     printf "project id: "
     read -r candidate </dev/tty || candidate=""
+    # cursor at start of line BELOW the prompt
+
     if ! validate_gcp_project_id "$candidate"; then
+      n_err=${#VALIDATION_ERRORS[@]}
       for e in "${VALIDATION_ERRORS[@]}"; do
-        printf "✗  %s\n" "$e"
+        printf "\033[K✗  %s\n" "$e"
       done
-      echo ""
+      printf "\033[J"                          # nuke any stale lines below
+      printf "\033[%dF\033[K" "$((n_err + 1))" # back up to prompt line, erase it
       continue
     fi
-    printf "--->  creating %s" "$candidate"
+
+    # Replace the prompt line with the spinner.
+    printf "\033[1F\033[K--->  creating %s" "$candidate"
     result=$(create_project "$candidate")
-    printf "\r\033[K"
+    printf "\r\033[K"  # erase spinner; cursor at col 0 of (now-empty) prompt line
+
     case "$result" in
       ok)
-        printf "✓  %s created\n" "$candidate"
+        # The done row sits where the prompt was. Clear stale errors below.
+        printf "✓     %s created\n\033[J" "$candidate"
         PID="$candidate"
         ;;
       taken)
-        printf "✗  %s is taken\n\n" "$candidate"
-        tried_names+=("$candidate")
+        printf "\n\033[K✗  %s is taken\033[J\033[1F" "$candidate"
+        ;;
+      quota)
+        printf "\n\033[K✗  account project limit reached — delete an unused project at console.cloud.google.com\033[J\033[1F"
         ;;
       timeout)
-        printf "✗  create timed out for %s\n\n" "$candidate"
-        tried_names+=("$candidate")
+        printf "\n\033[K✗  create timed out for %s\033[J\033[1F" "$candidate"
         ;;
-      err*)
-        printf "✗  error creating %s (HTTP %s)\n\n" "$candidate" "${result#err}"
-        tried_names+=("$candidate")
+      err:*)
+        msg="${result#err:}"
+        printf "\n\033[K✗  %s\033[J\033[1F" "$msg"
         ;;
       *)
-        printf "✗  unexpected result (%s) for %s\n\n" "$result" "$candidate"
-        tried_names+=("$candidate")
+        printf "\n\033[K✗  unexpected: %s\033[J\033[1F" "$result"
         ;;
     esac
   done
@@ -1746,12 +1769,15 @@ else
     else
       PID="${EXISTING_PIDS[$((choice - 1))]}"
       echo ""
-      printf "✓  using %s\n" "$PID"
+      # 4-cell icon slot to match the provisioning rows below.
+      printf "✓     using %s\n" "$PID"
     fi
   done
 fi
 
-echo ""
+# No blank line here — the success line above (✓ <pid> created /
+# ✓ using <pid>) is intended as the first row of the provisioning
+# list. provision_all draws its remaining rows immediately below.
 if ! provision_all; then
   exit 1
 fi
