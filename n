@@ -852,9 +852,9 @@ draw_row() {
   local i="$1" state="$2"
   local icon color
   case "$state" in
-    installed)  icon="${C_GRN}✓${C_RST}";  color="$C_GRN"  ;;
-    installing) icon="${C_GRAY}⋯${C_RST}"; color="$C_GRAY" ;;
-    pending)    icon="${C_GRAY}○${C_RST}"; color="$C_GRAY" ;;
+    installed)  icon="${C_GRN}✓  ${C_RST}";  color="$C_GRN"  ;;
+    installing) icon="${C_GRAY}...${C_RST}"; color="$C_GRAY" ;;
+    pending)    icon="${C_GRAY}○  ${C_RST}"; color="$C_GRAY" ;;
   esac
   printf '  %b  %b%s%b\n' "$icon" "$color" "${ITEMS[$i]}" "$C_RST"
 }
@@ -1644,10 +1644,10 @@ draw_prov_row() {
   local i="$1" state="$2"
   local icon color label
   case "$state" in
-    done)    icon="${C_GRN}✓${C_RST}";  color="$C_GRN";  label="${PROV_DONE[$i]}"    ;;
-    running) icon="${C_GRAY}⋯${C_RST}"; color="$C_GRAY"; label="${PROV_RUNNING[$i]}" ;;
-    pending) icon="${C_GRAY}○${C_RST}"; color="$C_GRAY"; label="${PROV_PENDING[$i]}" ;;
-    failed)  icon="${C_RED}✗${C_RST}";  color="$C_RED";  label="${PROV_RUNNING[$i]}" ;;
+    done)    icon="${C_GRN}✓  ${C_RST}";  color="$C_GRN";  label="${PROV_DONE[$i]}"    ;;
+    running) icon="${C_GRAY}...${C_RST}"; color="$C_GRAY"; label="${PROV_RUNNING[$i]}" ;;
+    pending) icon="${C_GRAY}○  ${C_RST}"; color="$C_GRAY"; label="${PROV_PENDING[$i]}" ;;
+    failed)  icon="${C_RED}✗  ${C_RST}";  color="$C_RED";  label="${PROV_RUNNING[$i]}" ;;
   esac
   printf '%b  %b%s%b\n' "$icon" "$color" "$label" "$C_RST"
 }
@@ -1710,7 +1710,7 @@ prompt_create_project() {
       echo ""
       continue
     fi
-    printf "${C_GRAY}⋯  creating %s${C_RST}" "$candidate"
+    printf "${C_GRAY}...  creating %s${C_RST}" "$candidate"
     result=$(create_project "$candidate")
     printf "\r\033[K"
     case "$result" in
@@ -1795,16 +1795,16 @@ PROJECT_PARENT="${PROJECT_DIR:-$HOME/Projects}"
 PROJECT_PATH="$PROJECT_PARENT/$PID"
 mkdir -p "$PROJECT_PARENT"
 
-# Labelled step runner: prints "⋯ label" while $2... runs (output to
+# Labelled step runner: prints "... label" while $2... runs (output to
 # $HTTP_LOG), replaces with "✓ label" on success or "✗ label" + log
 # tail + exit on failure.
 _deploy_step() {
   local label="$1"; shift
-  printf "${C_GRAY}⋯  %s${C_RST}" "$label"
+  printf "${C_GRAY}...  %s${C_RST}" "$label"
   if "$@" >> "$HTTP_LOG" 2>&1; then
-    printf "\r\033[K${C_GRN}✓  %s${C_RST}\n" "$label"
+    printf "\r\033[K${C_GRN}✓    %s${C_RST}\n" "$label"
   else
-    printf "\r\033[K${C_RED}✗  %s${C_RST}\n" "$label"
+    printf "\r\033[K${C_RED}✗    %s${C_RST}\n" "$label"
     echo ""
     echo "see $HTTP_LOG for details" >&2
     exit 1
