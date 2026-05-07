@@ -30,6 +30,8 @@
 
 set -e
 
+[ -t 1 ] && clear
+
 # =====================================================================
 # 1. CONSTANTS, COLORS, BASIC HELPERS
 # =====================================================================
@@ -550,6 +552,7 @@ PROFILE="\$HOME/Library/Application Support/Google/Chrome-Claude"
 "$chrome_app/Contents/MacOS/Google Chrome" \\
   --remote-debugging-port=9222 \\
   --silent-debugger-extension-api \\
+  --no-first-run \\
   --user-data-dir="\$PROFILE" \\
   "\$@" &>/dev/null &
 
@@ -927,33 +930,6 @@ fi
 # migrating from old `i` / `setup-project` aliases that now point at
 # dead paths.
 _write_zshrc >> "$INSTALL_LOG" 2>&1 || true
-
-# Chrome-default-browser is a first-run-only step (only ask once).
-if [ "$have_chrome" = "false" ] && [ "$OS" = "darwin" ]; then
-  echo ""
-  echo ""
-  heading "instructions for the next step: making chrome the default browser"
-  echo ""
-  echo "Next we'll launch chrome. when that happens, it's important to set chrome"
-  echo "as the default browser. You can ignore/dismiss alerts and press \"Don't"
-  echo "sign in\" for now."
-  echo ""
-  echo "Once that's done, QUIT CHROME and come back here :)"
-  echo ""
-  printf "${C_GRAY}press enter when you're ready${C_RST}\n"
-  read -r _ </dev/tty 2>/dev/null || true
-
-  if [ -d "$HOME/Applications/Chrome with Claude Code.app" ]; then
-    open "$HOME/Applications/Chrome with Claude Code.app" 2>/dev/null || true
-    for _ in $(seq 1 20); do
-      pgrep -U "$(id -u)" -f "$HOME/Applications/Google Chrome" >/dev/null 2>&1 && break
-      sleep 0.5
-    done
-    while pgrep -U "$(id -u)" -f "$HOME/Applications/Google Chrome" >/dev/null 2>&1; do
-      sleep 1
-    done
-  fi
-fi
 
 if [ "$N_TODO" -gt 0 ]; then
   echo ""
