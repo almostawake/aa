@@ -941,7 +941,6 @@ _write_zshrc >> "$INSTALL_LOG" 2>&1 || true
 echo ""
 echo "setting up new project"
 echo ""
-echo ""
 
 # Defensive: kill any stale cred from a prior failed run (otherwise
 # cmd-auth.mjs would probe it, find it valid, and silently reuse the
@@ -1710,10 +1709,20 @@ provision_all() {
     else
       update_prov_row "$i" "failed"
       echo ""
-      if [ -n "$PROV_SIGNIN_PREFLIGHT_FAIL" ]; then
-        # Sign-in succeeded but billing preflight failed — surface the
-        # one-time-setup hint with the right reason.
-        print_setup_needed "$EMAIL" "$PROV_SIGNIN_PREFLIGHT_FAIL"
+      if [ "$fn" = "_prov_signin" ]; then
+        if [ -n "$PROV_SIGNIN_PREFLIGHT_FAIL" ]; then
+          # Sign-in succeeded but billing preflight failed — surface the
+          # one-time-setup hint with the right reason.
+          print_setup_needed "$EMAIL" "$PROV_SIGNIN_PREFLIGHT_FAIL"
+        else
+          # cmd-auth.mjs returned non-zero — almost always the 120s
+          # browser-consent timeout.
+          echo "✗  we waited 2 mins for sign-in .. re-run when you're ready"
+        fi
+        # Suppress the EXIT-trap log dump — we've already shown the
+        # actionable line; the log tail would just be noise.
+        trap - EXIT
+        exit 1
       elif [ "$fn" = "_prov_add_firebase" ]; then
         printf "✗  Failed to add firebase to the project. This most likely means\n   you haven't yet accepted the Firebase terms & conditions.\n"
         echo ""
