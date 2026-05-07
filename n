@@ -1604,11 +1604,12 @@ _prov_create() {
   printf '\033[%dA\033[4L' "$up"
   # Cursor on line 1 (top).
   PID=""
+  PROV_CREATE_FATAL_MSG=""
   local candidate result msg combined err_msg=""
-  while [ -z "$PID" ]; do
-    # Line 1: error (or blank).
+  while [ -z "$PID" ] && [ -z "$PROV_CREATE_FATAL_MSG" ]; do
+    # Line 1: error (or blank). ✗ aligns with "choose" at col 6.
     printf '\r\033[K'
-    [ -n "$err_msg" ] && printf '  ✗   %s' "$err_msg"
+    [ -n "$err_msg" ] && printf '      ✗  %s' "$err_msg"
     # Line 2: prompt. Sub-bullet arrow indents to match row labels.
     printf '\033[1B\r\033[K  ->  choose a project id: '
     read -r candidate </dev/tty || candidate=""
@@ -1626,11 +1627,14 @@ _prov_create() {
     printf '\r\033[K\033[1A\r'                # erase spinner, back up to line 1
     case "$result" in
       ok)     PID="$candidate" ;;
+      # Recoverable — redraw in place and let the user try again.
       taken)  err_msg="$candidate is taken" ;;
-      quota)  err_msg="account project limit reached — delete an unused project at console.cloud.google.com" ;;
       timeout) err_msg="create timed out for $candidate" ;;
       err:*)  msg="${result#err:}"; err_msg="$msg" ;;
       *)      err_msg="unexpected: $result" ;;
+      # Not recoverable in this session — bail out, let the
+      # orchestrator print it at the bottom and exit.
+      quota)  PROV_CREATE_FATAL_MSG="account project limit reached — delete an unused project at console.cloud.google.com" ;;
     esac
   done
   # Close: cursor on line 1, delete all 4 lines.
@@ -1638,6 +1642,7 @@ _prov_create() {
   if [ "$up" -gt 0 ]; then
     printf '\033[%dB\r' "$up"
   fi
+  [ -n "$PROV_CREATE_FATAL_MSG" ] && return 1
   return 0
 }
 
@@ -1710,12 +1715,18 @@ provision_all() {
           # one-time-setup hint with the right reason.
           print_setup_needed "$EMAIL" "$PROV_SIGNIN_PREFLIGHT_FAIL"
         else
-          # cmd-auth.mjs returned non-zero — almost always the 120s
+          # cmd-auth.mjs returned non-zero — almost always the 5-min
           # browser-consent timeout.
           echo "✗  we waited 5 mins for sign-in .. re-run when you're ready"
         fi
         # Suppress the EXIT-trap log dump — we've already shown the
         # actionable line; the log tail would just be noise.
+        trap - EXIT
+        exit 1
+      elif [ "$fn" = "_prov_create" ] && [ -n "$PROV_CREATE_FATAL_MSG" ]; then
+        # Non-recoverable create error (quota etc.) — bottom message,
+        # no log dump, exit. User has to fix it externally and re-run.
+        echo "✗  $PROV_CREATE_FATAL_MSG"
         trap - EXIT
         exit 1
       elif [ "$fn" = "_prov_add_firebase" ]; then
