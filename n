@@ -13,7 +13,7 @@
 # spinning up another project. Aliased to `n` once installed (~/.zshrc).
 #
 # SECTIONS (search "^# ====" for jumps):
-#    1. CONSTANTS, COLORS, BASIC HELPERS
+#    1. CONSTANTS + BASIC HELPERS
 #    2. LOGGING + EXIT TRAP
 #    3. OS / ARCH DETECTION
 #    4. DETECT WHAT'S INSTALLED
@@ -33,8 +33,11 @@ set -e
 [ -t 1 ] && clear
 
 # =====================================================================
-# 1. CONSTANTS, COLORS, BASIC HELPERS
+# 1. CONSTANTS + BASIC HELPERS
 # =====================================================================
+# Deliberately monochrome — no colour anywhere in the script. Some
+# terminal themes render certain ANSI colours invisible; relying only
+# on glyphs + uppercase + horizontal rules for emphasis avoids that.
 
 IF_HOME="$HOME/.if"
 INSTALL_LOG="/tmp/if-install.log"
@@ -49,24 +52,9 @@ MARKER_END="# <<< if install <<<"
 mkdir -p "$IF_HOME"
 : > "$INSTALL_LOG"
 
-if [ -t 1 ]; then
-  C_RED=$'\033[31m'; C_GRAY=$'\033[90m'
-  # 256-colour palette, matched depth on light terminals. Truecolor
-  # (\033[38;2;...) was tried but Terminal.app misrenders it as bright
-  # magenta, so we use 256-colour mode.
-  #   blue  = idx 17 (#00005f, deep navy / midnight blue)
-  #   green = idx 22 (#005f00, dark forest green — matched depth to blue)
-  C_BLU=$'\033[38;5;17m'
-  C_GRN=$'\033[38;5;22m'
-  C_YEL=$'\033[33m'
-  C_BLD=$'\033[1m'; C_RST=$'\033[0m'
-else
-  C_RED=""; C_GRN=""; C_GRAY=""; C_BLU=""; C_YEL=""; C_BLD=""; C_RST=""
-fi
-
 say()     { printf '%s\n' "$*"; }
-die()     { printf "${C_RED}error:${C_RST} %s\n" "$*" >&2; exit 1; }
-heading() { printf "${C_BLD}${C_BLU}%s${C_RST}\n" "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"; }
+die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
+heading() { printf '%s\n' "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"; }
 
 prompt_yn() {
   local q="$1" def="$2" hint answer
@@ -255,11 +243,21 @@ if [ "$N_TODO" -gt 0 ]; then
   echo ""
   echo "═══════════════════════════════════════════════════════════════════════"
   echo ""
+  # Cursor dance on bad input: write the error on the line below
+  # (where the user's enter just landed), then jump back UP to the
+  # prompt line and erase it so the loop's next prompt redraws clean.
+  # Net effect: error stays visible underneath, prompt sits right above
+  # it ready for another try. On success, erase the line below in case
+  # a stale error sits there.
   while true; do
     printf "do you understand (yes/NO) "
     read -r _ack </dev/tty || _ack=""
-    [ "$_ack" = "yes" ] && break
-    printf "${C_RED}✗  type 'yes' (literally) to accept the warning${C_RST}\n\n"
+    if [ "$_ack" = "yes" ]; then
+      printf "\r\033[K"
+      break
+    fi
+    printf "\r\033[K✗  type 'yes' (literally) to accept the warning"
+    printf "\033[1A\r\033[K"
   done
 fi
 
@@ -851,15 +849,17 @@ _write_zshrc() {
 # =====================================================================
 
 # draw_row "$i" "$state" — installed | installing | pending
+# Icon slot is always 4 cells. Running uses ---> (literal arrow, hard
+# to miss); idle states use a glyph + spaces to keep column alignment.
 draw_row() {
   local i="$1" state="$2"
-  local icon color
+  local icon
   case "$state" in
-    installed)  icon="${C_GRN}✓  ${C_RST}";  color="$C_GRN"  ;;
-    installing) icon="${C_GRAY}...${C_RST}"; color="$C_GRAY" ;;
-    pending)    icon="${C_GRAY}○  ${C_RST}"; color="$C_GRAY" ;;
+    installed)  icon="✓   " ;;
+    installing) icon="--->" ;;
+    pending)    icon="○   " ;;
   esac
-  printf '  %b  %b%s%b\n' "$icon" "$color" "${ITEMS[$i]}" "$C_RST"
+  printf '  %s  %s\n' "$icon" "${ITEMS[$i]}"
 }
 
 # update_row "$i" "$state" — move cursor up to row i, redraw, move back.
@@ -897,9 +897,7 @@ run_install() {
 if [ "$N_TODO" -gt 0 ]; then
   echo ""
   echo ""
-  heading "First: installing the core tooling"
-  echo ""
-  echo "Techy bits you'll get to know later. We use them for installing stuff for you today."
+  echo "checking/installing dependencies"
   echo ""
 
   for i in $(seq 0 $((N - 1))); do
@@ -955,7 +953,7 @@ echo "Next you'll give access to a dedicated gmail account so claude"
 echo "can administer things in that account on your behalf. Sign in"
 echo "with that account in the browser when prompted."
 echo ""
-printf "${C_GRAY}press enter to continue${C_RST}\n"
+printf "press enter to continue\n"
 read -r _ </dev/tty 2>/dev/null || true
 echo ""
 
@@ -1618,14 +1616,14 @@ _prov_auth()                    { configure_auth "$PID"; }
 
 draw_prov_row() {
   local i="$1" state="$2"
-  local icon color label
+  local icon label
   case "$state" in
-    done)    icon="${C_GRN}✓  ${C_RST}";  color="$C_GRN";  label="${PROV_DONE[$i]}"    ;;
-    running) icon="${C_GRAY}...${C_RST}"; color="$C_GRAY"; label="${PROV_RUNNING[$i]}" ;;
-    pending) icon="${C_GRAY}○  ${C_RST}"; color="$C_GRAY"; label="${PROV_PENDING[$i]}" ;;
-    failed)  icon="${C_RED}✗  ${C_RST}";  color="$C_RED";  label="${PROV_RUNNING[$i]}" ;;
+    done)    icon="✓   "; label="${PROV_DONE[$i]}"    ;;
+    running) icon="--->"; label="${PROV_RUNNING[$i]}" ;;
+    pending) icon="○   "; label="${PROV_PENDING[$i]}" ;;
+    failed)  icon="✗   "; label="${PROV_RUNNING[$i]}" ;;
   esac
-  printf '%b  %b%s%b\n' "$icon" "$color" "$label" "$C_RST"
+  printf '%s  %s\n' "$icon" "$label"
 }
 
 update_prov_row() {
@@ -1655,7 +1653,7 @@ provision_all() {
       update_prov_row "$i" "failed"
       echo ""
       if [ "$fn" = "_prov_add_firebase" ]; then
-        printf "${C_RED}✗  Failed to add firebase to the project. This most likely means\n   you haven't yet accepted the Firebase terms & conditions.${C_RST}\n"
+        printf "✗  Failed to add firebase to the project. This most likely means\n   you haven't yet accepted the Firebase terms & conditions.\n"
         echo ""
         printf "Press any key to open the readme..."
         read -n 1 -s -r </dev/tty || true
@@ -1675,39 +1673,39 @@ prompt_create_project() {
     if [ ${#tried_names[@]} -gt 0 ]; then
       joined=$(printf "%s, " "${tried_names[@]}")
       joined="${joined%, }"
-      printf "${C_GRAY}already tried: %s${C_RST}\n" "$joined"
+      printf "already tried: %s\n" "$joined"
     fi
     printf "project id: "
     read -r candidate </dev/tty || candidate=""
     if ! validate_gcp_project_id "$candidate"; then
       for e in "${VALIDATION_ERRORS[@]}"; do
-        printf "${C_RED}✗  %s${C_RST}\n" "$e"
+        printf "✗  %s\n" "$e"
       done
       echo ""
       continue
     fi
-    printf "${C_GRAY}...  creating %s${C_RST}" "$candidate"
+    printf "--->  creating %s" "$candidate"
     result=$(create_project "$candidate")
     printf "\r\033[K"
     case "$result" in
       ok)
-        printf "${C_GRN}✓  %s created${C_RST}\n" "$candidate"
+        printf "✓  %s created\n" "$candidate"
         PID="$candidate"
         ;;
       taken)
-        printf "${C_RED}✗  %s is taken${C_RST}\n\n" "$candidate"
+        printf "✗  %s is taken\n\n" "$candidate"
         tried_names+=("$candidate")
         ;;
       timeout)
-        printf "${C_RED}✗  create timed out for %s${C_RST}\n\n" "$candidate"
+        printf "✗  create timed out for %s\n\n" "$candidate"
         tried_names+=("$candidate")
         ;;
       err*)
-        printf "${C_RED}✗  error creating %s (HTTP %s)${C_RST}\n\n" "$candidate" "${result#err}"
+        printf "✗  error creating %s (HTTP %s)\n\n" "$candidate" "${result#err}"
         tried_names+=("$candidate")
         ;;
       *)
-        printf "${C_RED}✗  unexpected result (%s) for %s${C_RST}\n\n" "$result" "$candidate"
+        printf "✗  unexpected result (%s) for %s\n\n" "$result" "$candidate"
         tried_names+=("$candidate")
         ;;
     esac
@@ -1738,7 +1736,7 @@ else
     read -r choice </dev/tty || choice=""
 
     if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "$n" ]; then
-      printf "${C_RED}✗  pick a number 1-%d${C_RST}\n\n" "$n"
+      printf "✗  pick a number 1-%d\n\n" "$n"
       continue
     fi
 
@@ -1748,7 +1746,7 @@ else
     else
       PID="${EXISTING_PIDS[$((choice - 1))]}"
       echo ""
-      printf "${C_GRN}✓  using %s${C_RST}\n" "$PID"
+      printf "✓  using %s\n" "$PID"
     fi
   done
 fi
@@ -1771,16 +1769,17 @@ PROJECT_PARENT="${PROJECT_DIR:-$HOME/Projects}"
 PROJECT_PATH="$PROJECT_PARENT/$PID"
 mkdir -p "$PROJECT_PARENT"
 
-# Labelled step runner: prints "... label" while $2... runs (output to
+# Labelled step runner: prints "---> label" while $2... runs (output to
 # $HTTP_LOG), replaces with "✓ label" on success or "✗ label" + log
-# tail + exit on failure.
+# tail + exit on failure. Icon slot is 4 cells so the label position
+# is identical across spinner / success / failure (no jump on swap).
 _deploy_step() {
   local label="$1"; shift
-  printf "${C_GRAY}...  %s${C_RST}" "$label"
+  printf "--->  %s" "$label"
   if "$@" >> "$HTTP_LOG" 2>&1; then
-    printf "\r\033[K${C_GRN}✓    %s${C_RST}\n" "$label"
+    printf "\r\033[K✓     %s\n" "$label"
   else
-    printf "\r\033[K${C_RED}✗    %s${C_RST}\n" "$label"
+    printf "\r\033[K✗     %s\n" "$label"
     echo ""
     echo "see $HTTP_LOG for details" >&2
     exit 1
@@ -1927,8 +1926,8 @@ trap - EXIT
 echo ""
 heading "project ready"
 echo ""
-printf "Live at: ${C_BLU}https://%s.web.app${C_RST}\n" "$PID"
+printf "Live at: https://%s.web.app\n" "$PID"
 printf "Code:    %s\n" "$PROJECT_PATH"
 echo ""
-printf "${C_GRAY}next time: run ${C_RST}n${C_GRAY} (alias added to ~/.zshrc) for another project${C_RST}\n"
+printf "next time: run n (alias added to ~/.zshrc) for another project\n"
 echo ""
