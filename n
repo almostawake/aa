@@ -1605,7 +1605,7 @@ _prov_create() {
   # Cursor on line 1 (top).
   PID=""
   PROV_CREATE_FATAL_MSG=""
-  local candidate result msg combined err_msg=""
+  local candidate result combined err_msg=""
   while [ -z "$PID" ] && [ -z "$PROV_CREATE_FATAL_MSG" ]; do
     # Line 1: error (or blank). ✗ aligns with "choose" at col 6.
     printf '\r\033[K'
@@ -1626,15 +1626,17 @@ _prov_create() {
     result=$(create_project "$candidate")
     printf '\r\033[K\033[1A\r'                # erase spinner, back up to line 1
     case "$result" in
-      ok)     PID="$candidate" ;;
+      ok)      PID="$candidate" ;;
       # Recoverable — redraw in place and let the user try again.
-      taken)  err_msg="$candidate is taken" ;;
-      timeout) err_msg="create timed out for $candidate" ;;
-      err:*)  msg="${result#err:}"; err_msg="$msg" ;;
-      *)      err_msg="unexpected: $result" ;;
-      # Not recoverable in this session — bail out, let the
-      # orchestrator print it at the bottom and exit.
-      quota)  PROV_CREATE_FATAL_MSG="account project limit reached — delete an unused project at console.cloud.google.com" ;;
+      taken)   err_msg="$candidate is taken" ;;
+      # Everything else is fatal in this session — bail out, let the
+      # orchestrator print at the bottom and exit. Specific known
+      # cases first; `*` catches anything we forgot. (Order matters:
+      # `*` MUST be last in a bash case statement.)
+      quota)   PROV_CREATE_FATAL_MSG="account project limit reached — delete an unused project at console.cloud.google.com" ;;
+      timeout) PROV_CREATE_FATAL_MSG="create timed out for $candidate" ;;
+      err:*)   PROV_CREATE_FATAL_MSG="${result#err:}" ;;
+      *)       PROV_CREATE_FATAL_MSG="unexpected: $result" ;;
     esac
   done
   # Close: cursor on line 1, delete all 4 lines.
