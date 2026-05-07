@@ -53,7 +53,6 @@ mkdir -p "$IF_HOME"
 
 say()     { printf '%s\n' "$*"; }
 die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
-heading() { printf '%s\n' "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"; }
 
 prompt_yn() {
   local q="$1" def="$2" hint answer
@@ -846,9 +845,10 @@ _write_zshrc() {
 # 9. ROW UI + INSTALL/CONFIGURE ORCHESTRATOR
 # =====================================================================
 
-# draw_row "$i" "$state" — installed | installing | pending
+# draw_row "$i" "$state" — installed | installing | pending | failed.
 # Icon slot is always 4 cells. Running uses ---> (literal arrow, hard
 # to miss); idle states use a glyph + spaces to keep column alignment.
+# Format mirrors draw_prov_row / draw_dep_row — no leading indent.
 draw_row() {
   local i="$1" state="$2"
   local icon
@@ -856,8 +856,9 @@ draw_row() {
     installed)  icon="✓   " ;;
     installing) icon="--->" ;;
     pending)    icon="○   " ;;
+    failed)     icon="✗   " ;;
   esac
-  printf '  %s  %s\n' "$icon" "${ITEMS[$i]}"
+  printf '%s  %s\n' "$icon" "${ITEMS[$i]}"
 }
 
 # update_row "$i" "$state" — move cursor up to row i, redraw, move back.
@@ -885,9 +886,13 @@ run_install() {
   if [ "$rc" -eq 0 ]; then
     update_row "$i" "installed"
   else
-    update_row "$i" "pending"
+    update_row "$i" "failed"
     echo ""
-    echo "install of ${ITEMS[$i]} failed (rc=$rc) — see $INSTALL_LOG" >&2
+    echo ""
+    echo "✗  install of ${ITEMS[$i]} failed — see $INSTALL_LOG for details"
+    echo ""
+    echo ""
+    trap - EXIT
     exit 1
   fi
 }
@@ -1711,6 +1716,7 @@ provision_all() {
     else
       update_prov_row "$i" "failed"
       echo ""
+      echo ""
       if [ "$fn" = "_prov_signin" ]; then
         if [ -n "$PROV_SIGNIN_PREFLIGHT_FAIL" ]; then
           # Sign-in succeeded but billing preflight failed — surface the
@@ -1721,66 +1727,37 @@ provision_all() {
           # browser-consent timeout.
           echo "✗  we waited 5 mins for sign-in .. re-run when you're ready"
         fi
-        # Suppress the EXIT-trap log dump — we've already shown the
-        # actionable line; the log tail would just be noise.
-        trap - EXIT
-        exit 1
       elif [ "$fn" = "_prov_create" ] && [ -n "$PROV_CREATE_FATAL_MSG" ]; then
-        # Non-recoverable create error (quota etc.) — bottom message,
-        # no log dump, exit. User has to fix it externally and re-run.
         echo "✗  $PROV_CREATE_FATAL_MSG"
-        trap - EXIT
-        exit 1
       elif [ "$fn" = "_prov_add_firebase" ]; then
-        printf "✗  Failed to add firebase to the project. This most likely means\n   you haven't yet accepted the Firebase terms & conditions.\n"
-        echo ""
-        printf "Press any key to open the readme..."
-        read -n 1 -s -r </dev/tty || true
-        printf "\r\033[K"
-        chrome_open "https://github.com/almostawake/if#readme"
+        echo "✗  failed to add firebase — most likely Firebase ToS not accepted"
+        echo "   see https://github.com/almostawake/if#readme for the fix"
+      else
+        echo "✗  $fn failed — see $HTTP_LOG for details"
       fi
-      return 1
+      echo ""
+      echo ""
+      # Clean message already shown — suppress the EXIT-trap log dump.
+      trap - EXIT
+      exit 1
     fi
   done
-  return 0
 }
 
 # Run the row UI: sign-in → create project → enable APIs → configure.
-# All interactive parts handled by the row wrappers via insert/delete-
-# line cursor magic.
-if ! provision_all; then
-  exit 1
-fi
+provision_all
 
 # =====================================================================
-# 13. CLONE TEMPLATE + ENV + SEED + DEPLOY
+# 13. DEPLOYING (clone + tailor + deploy via row UI)
 # =====================================================================
-# Clone fresh into ${PROJECT_DIR}/<pid> (PROJECT_DIR comes from ~/.zshrc,
-# default ~/Projects), copy in the staged .env.auth.json, write .env
-# (PROJECT_ID + ACCOUNT_EMAIL), write client/.env (Firebase Web config),
-# seed the project owner's email into Firestore allowedEmails, npm
-# install, deploy.
+# Same row-UI mechanics as the install + provision blocks. Three rows;
+# each wrapper bundles the relevant low-level functions so the whole
+# block is one continuous list with consistent styling and error
+# behaviour (✗ on the row, clean message at the bottom, exit).
 
 PROJECT_PARENT="${PROJECT_DIR:-$HOME/Projects}"
 PROJECT_PATH="$PROJECT_PARENT/$PID"
 mkdir -p "$PROJECT_PARENT"
-
-# Labelled step runner: prints "---> label" while $2... runs (output to
-# $HTTP_LOG), replaces with "✓ label" on success or "✗ label" + log
-# tail + exit on failure. Icon slot is 4 cells so the label position
-# is identical across spinner / success / failure (no jump on swap).
-_deploy_step() {
-  local label="$1"; shift
-  printf "--->  %s" "$label"
-  if "$@" >> "$HTTP_LOG" 2>&1; then
-    printf "\r\033[K✓     %s\n" "$label"
-  else
-    printf "\r\033[K✗     %s\n" "$label"
-    echo ""
-    echo "see $HTTP_LOG for details" >&2
-    exit 1
-  fi
-}
 
 # Idempotent clone: if dir exists we leave it alone (so re-runs don't
 # nuke local edits). Fresh runs do a real `git clone` from the public
@@ -1901,16 +1878,86 @@ _deploy_to_fb() {
     GOOGLE_ACCESS_TOKEN="$ACCESS_TOKEN" node cmd-deploy.mjs )
 }
 
+# --- row UI for the deploy phase ---
+
+DEPLOY_PENDING=(
+  "downloading project template"
+  "tailoring project settings"
+  "deploying project"
+)
+DEPLOY_RUNNING=(
+  "downloading project template"
+  "tailoring project settings"
+  "deploying project"
+)
+DEPLOY_DONE=(
+  "project template downloaded"
+  "project settings tailored"
+  "project deployed"
+)
+DEPLOY_FNS=(
+  "_dep_download"
+  "_dep_tailor"
+  "_dep_deploy"
+)
+DEPLOY_N=${#DEPLOY_PENDING[@]}
+
+_dep_download() { _clone_template && _move_auth_cred; }
+_dep_tailor()   { _write_env && _write_client_env && _seed_allowed_email; }
+_dep_deploy()   { _install_deps && _deploy_to_fb; }
+
+draw_dep_row() {
+  local i="$1" state="$2"
+  local icon label
+  case "$state" in
+    done)    icon="✓   "; label="${DEPLOY_DONE[$i]}"    ;;
+    running) icon="--->"; label="${DEPLOY_RUNNING[$i]}" ;;
+    pending) icon="○   "; label="${DEPLOY_PENDING[$i]}" ;;
+    failed)  icon="✗   "; label="${DEPLOY_RUNNING[$i]}" ;;
+  esac
+  printf '%s  %s\n' "$icon" "$label"
+}
+
+update_dep_row() {
+  local i="$1" state="$2"
+  local up=$((DEPLOY_N - i))
+  printf '\033[%dA\r\033[K' "$up"
+  draw_dep_row "$i" "$state"
+  local down=$((DEPLOY_N - i - 1))
+  if [ "$down" -gt 0 ]; then
+    printf '\033[%dB\r' "$down"
+  fi
+}
+
+deploy_all() {
+  local i fn rc
+  for i in $(seq 0 $((DEPLOY_N - 1))); do
+    draw_dep_row "$i" "pending"
+  done
+  for i in "${!DEPLOY_FNS[@]}"; do
+    fn="${DEPLOY_FNS[$i]}"
+    update_dep_row "$i" "running"
+    rc=0
+    "$fn" >> "$HTTP_LOG" 2>&1 || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      update_dep_row "$i" "done"
+    else
+      update_dep_row "$i" "failed"
+      echo ""
+      echo ""
+      echo "✗  ${DEPLOY_PENDING[$i]} failed — see $HTTP_LOG for details"
+      echo ""
+      echo ""
+      trap - EXIT
+      exit 1
+    fi
+  done
+}
+
 echo ""
-heading "now: clone, install, deploy"
+echo "deploying your project"
 echo ""
-_deploy_step "cloning if template into $PROJECT_PATH" _clone_template
-_deploy_step "moving auth cred into project" _move_auth_cred
-_deploy_step "writing .env (PROJECT_ID, ACCOUNT_EMAIL)" _write_env
-_deploy_step "writing client/.env (firebase web config)" _write_client_env
-_deploy_step "seeding $EMAIL as initial allowed user" _seed_allowed_email
-_deploy_step "installing dependencies (this can take a minute)" _install_deps
-_deploy_step "building + deploying to firebase" _deploy_to_fb
+deploy_all
 
 # =====================================================================
 # 14. PROJECT READY
@@ -1920,7 +1967,7 @@ _deploy_step "building + deploying to firebase" _deploy_to_fb
 trap - EXIT
 
 echo ""
-heading "project ready"
+echo "project ready"
 echo ""
 printf "Live at: https://%s.web.app\n" "$PID"
 printf "Code:    %s\n" "$PROJECT_PATH"
