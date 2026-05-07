@@ -43,7 +43,6 @@ IF_HOME="$HOME/.if"
 INSTALL_LOG="/tmp/if-install.log"
 HTTP_LOG="${HTTP_LOG:-/tmp/if-new.log}"
 TEMPLATE_REPO="https://github.com/almostawake/if.git"
-TEMPLATE_STAGE="$IF_HOME/template-stage"
 NODE_VERSION="22.11.0"
 JAVA_VERSION="21"
 MARKER_START="# >>> if install >>>"
@@ -225,41 +224,40 @@ N_TODO=0
 for x in "${INSTALLED[@]}"; do [ "$x" = "false" ] && N_TODO=$((N_TODO + 1)); done
 
 # =====================================================================
-# 5. WELCOME BANNER + OPT-IN
+# 5. WARNING + OPT-IN
 # =====================================================================
-# First-time only. Re-runs (N_TODO == 0) skip straight to project setup.
+# Shown on every run. The acceptance is cheap (one "yes") and the
+# reminder is worth re-surfacing — the user may have habits that slip.
 
-if [ "$N_TODO" -gt 0 ]; then
-  echo ""
-  echo "Let's get you set up.  but first ..."
-  echo ""
-  echo "═══════════════════════════════ WARNING ═══════════════════════════════"
-  echo ""
-  echo "read the following warning and accept only if you're comfortable:"
-  echo ""
-  echo "  1. these tools are for hobby purposes, not to be used at work"
-  echo "  2. don't put sensitive data here until your security skills mature"
-  echo "  3. use separate mac and gmail accounts — not your daily ones"
-  echo ""
-  echo "═══════════════════════════════════════════════════════════════════════"
-  echo ""
-  # Cursor dance on bad input: write the error on the line below
-  # (where the user's enter just landed), then jump back UP to the
-  # prompt line and erase it so the loop's next prompt redraws clean.
-  # Net effect: error stays visible underneath, prompt sits right above
-  # it ready for another try. On success, erase the line below in case
-  # a stale error sits there.
-  while true; do
-    printf "do you understand (yes/NO) "
-    read -r _ack </dev/tty || _ack=""
-    if [ "$_ack" = "yes" ]; then
-      printf "\r\033[K"
-      break
-    fi
-    printf "\r\033[K✗  type 'yes' (literally) to accept the warning"
-    printf "\033[1A\r\033[K"
-  done
-fi
+echo ""
+echo "Let's get you set up.  but first ..."
+echo ""
+echo "═══════════════════════════════ WARNING ═══════════════════════════════"
+echo ""
+echo "read the following warning and accept only if you're comfortable:"
+echo ""
+echo "  1. these tools are for hobby purposes, not to be used at work"
+echo "  2. don't put sensitive data here until your security skills mature"
+echo "  3. use separate mac and gmail accounts — not your daily ones"
+echo ""
+echo "═══════════════════════════════════════════════════════════════════════"
+echo ""
+# Cursor dance on bad input: write the error on the line below
+# (where the user's enter just landed), then jump back UP to the
+# prompt line and erase it so the loop's next prompt redraws clean.
+# Net effect: error stays visible underneath, prompt sits right above
+# it ready for another try. On success, erase the line below in case
+# a stale error sits there.
+while true; do
+  printf "do you understand (yes/NO) "
+  read -r _ack </dev/tty || _ack=""
+  if [ "$_ack" = "yes" ]; then
+    printf "\r\033[K"
+    break
+  fi
+  printf "\r\033[K✗  type 'yes' (literally) to accept the warning"
+  printf "\033[1A\r\033[K"
+done
 
 # =====================================================================
 # 6. INSTALL HELPERS
@@ -894,35 +892,38 @@ run_install() {
   fi
 }
 
-if [ "$N_TODO" -gt 0 ]; then
-  echo ""
-  echo ""
-  echo "checking/installing dependencies"
-  echo ""
+# Always render the row UI — even on re-runs where everything is
+# already installed, the user sees the verification pass before we
+# move on. Already-installed items render green from the start (no
+# spinner / no install function); missing items go pending → running
+# → done as they install.
+echo ""
+echo ""
+echo "checking/installing dependencies"
+echo ""
 
-  for i in $(seq 0 $((N - 1))); do
-    if [ "${INSTALLED[$i]}" = "true" ]; then
-      draw_row "$i" "installed"
-    else
-      draw_row "$i" "pending"
-    fi
-  done
+for i in $(seq 0 $((N - 1))); do
+  if [ "${INSTALLED[$i]}" = "true" ]; then
+    draw_row "$i" "installed"
+  else
+    draw_row "$i" "pending"
+  fi
+done
 
-  for i in "${!ITEMS[@]}"; do
-    [ "${INSTALLED[$i]}" = "true" ] && continue
-    run_install "$i" "${INSTALL_FNS[$i]}"
-  done
+for i in "${!ITEMS[@]}"; do
+  [ "${INSTALLED[$i]}" = "true" ] && continue
+  run_install "$i" "${INSTALL_FNS[$i]}"
+done
 
-  # Make just-installed binaries usable for the rest of this run.
-  export PATH="$IF_HOME/gh/bin:$IF_HOME/git/bin:$IF_HOME/node/bin:$IF_HOME/claude/bin:$PATH"
-  [ -d "$IF_HOME/git/lib" ] && export DYLD_FALLBACK_LIBRARY_PATH="$IF_HOME/git/lib"
-  [ -d "$IF_HOME/java/Contents/Home" ] && export JAVA_HOME="$IF_HOME/java/Contents/Home" && export PATH="$JAVA_HOME/bin:$PATH"
-  [ -d "$IF_HOME/java/bin" ] && export JAVA_HOME="$IF_HOME/java" && export PATH="$JAVA_HOME/bin:$PATH"
+# Make just-installed binaries usable for the rest of this run.
+export PATH="$IF_HOME/gh/bin:$IF_HOME/git/bin:$IF_HOME/node/bin:$IF_HOME/claude/bin:$PATH"
+[ -d "$IF_HOME/git/lib" ] && export DYLD_FALLBACK_LIBRARY_PATH="$IF_HOME/git/lib"
+[ -d "$IF_HOME/java/Contents/Home" ] && export JAVA_HOME="$IF_HOME/java/Contents/Home" && export PATH="$JAVA_HOME/bin:$PATH"
+[ -d "$IF_HOME/java/bin" ] && export JAVA_HOME="$IF_HOME/java" && export PATH="$JAVA_HOME/bin:$PATH"
 
-  # Silent end-steps (no row, just do the work).
-  _configure_terminal  >> "$INSTALL_LOG" 2>&1 || true
-  _configure_workspace >> "$INSTALL_LOG" 2>&1 || true
-fi
+# Silent end-steps (no row, just do the work). Idempotent.
+_configure_terminal  >> "$INSTALL_LOG" 2>&1 || true
+_configure_workspace >> "$INSTALL_LOG" 2>&1 || true
 
 # Always rewrite the marker block — cheap, idempotent, catches users
 # migrating from old `i` / `setup-project` aliases that now point at
@@ -930,49 +931,29 @@ fi
 _write_zshrc >> "$INSTALL_LOG" 2>&1 || true
 
 # =====================================================================
-# 10. SIGN IN (via template stage + cmd-auth.mjs)
+# 10. SETTING UP NEW PROJECT (intro + auth happens in row UI below)
 # =====================================================================
-# Stage the public template into ~/.if/template-stage so we can use
-# its cmd-auth.mjs for the OAuth flow. Cred lands at
-# ~/.if/template-stage/.env.auth.json — we copy it into the final
-# project dir later (cp not mv, so future `n` runs reuse the cached
-# token and skip browser consent).
-#
-# cmd-auth.mjs prints its own progress to stderr ("opening browser…",
-# "✓ signed in as …"), so for first-runs the user sees what's
-# happening; for cached-cred re-runs it's silent.
+# No staging — cmd-auth.mjs is fetched to ~/.if/cmd-auth.mjs each run
+# and run there. Its default behaviour writes the cred next to itself,
+# so we get ~/.if/.env.auth.json. After the project is cloned we MOVE
+# the cred into <project>/.env.auth.json (not copy — no central state).
 
 echo ""
 echo "setting up new project"
 echo ""
 echo ""
 
-stage_template() {
-  if [ -d "$TEMPLATE_STAGE/.git" ]; then
-    log "stage_template: pulling existing stage"
-    ( cd "$TEMPLATE_STAGE" && git pull --ff-only --quiet ) >> "$INSTALL_LOG" 2>&1 \
-      || log "stage_template: pull failed (non-fatal)"
-  else
-    log "stage_template: fresh clone"
-    rm -rf "$TEMPLATE_STAGE"
-    git clone --depth 1 --quiet "$TEMPLATE_REPO" "$TEMPLATE_STAGE" >> "$INSTALL_LOG" 2>&1 \
-      || die "couldn't clone template repo"
-  fi
-}
-stage_template
+# Defensive: kill any stale cred from a prior failed run (otherwise
+# cmd-auth.mjs would probe it, find it valid, and silently reuse the
+# old account for this new project — bypassing the fresh-sign-in-per-
+# project model).
+rm -f "$IF_HOME/.env.auth.json"
 
-# cmd-auth.mjs is interactive (opens browser, listens on a loopback
-# port for the callback). On success it writes .env.auth.json next to
-# itself and prints "✓  signed in as <email>" to stderr.
-( cd "$TEMPLATE_STAGE" && node cmd-auth.mjs </dev/tty ) || die "sign-in didn't complete"
-[ -f "$TEMPLATE_STAGE/.env.auth.json" ] || die "sign-in produced no cred file"
-
-EMAIL=$(perl -MJSON::PP -e 'print decode_json(do { local $/; <STDIN> })->{email} // ""' < "$TEMPLATE_STAGE/.env.auth.json")
-ACCESS_TOKEN=$(perl -MJSON::PP -e 'print decode_json(do { local $/; <STDIN> })->{tokens}{access_token} // ""' < "$TEMPLATE_STAGE/.env.auth.json")
-[ -n "$EMAIL" ]        || die "couldn't read email from $TEMPLATE_STAGE/.env.auth.json"
-[ -n "$ACCESS_TOKEN" ] || die "couldn't read access_token from $TEMPLATE_STAGE/.env.auth.json"
-
-log "n: signed in as $EMAIL"
+# Fetch cmd-auth.mjs fresh — small file, idempotent. Lands at
+# ~/.if/cmd-auth.mjs; cred will land alongside as .env.auth.json.
+curl -fsSL https://raw.githubusercontent.com/almostawake/if/main/cmd-auth.mjs \
+  -o "$IF_HOME/cmd-auth.mjs" >> "$INSTALL_LOG" 2>&1 \
+  || die "couldn't fetch cmd-auth.mjs"
 
 # =====================================================================
 # 11. GCP/FIREBASE REST PLUMBING
@@ -986,33 +967,6 @@ json_extract() {
 op_name_from() {
   printf '%s' "$1" | grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]+' \
     | head -1 | sed 's/.*"\([^"]*\)$/\1/'
-}
-
-# Populate global EXISTING_PIDS with active projects accessible to the
-# authenticated account. Personal accounts are well under the page
-# limit, so a single page is fine.
-EXISTING_PIDS=()
-list_projects() {
-  EXISTING_PIDS=()
-  local resp
-  if ! resp=$(curl -fsSL \
-      -H "Authorization: Bearer $ACCESS_TOKEN" \
-      "https://cloudresourcemanager.googleapis.com/v3/projects:search?query=state:ACTIVE&pageSize=50" 2>&1); then
-    http_log "list_projects: failed: $resp"
-    return 1
-  fi
-  local pids
-  pids=$(printf '%s' "$resp" | perl -MJSON::PP -e '
-    my $j = decode_json(do { local $/; <STDIN> });
-    for my $p (@{$j->{projects} // []}) {
-      print $p->{projectId}, "\n";
-    }
-  ') || { http_log "list_projects: parse failed"; return 1; }
-  while IFS= read -r line; do
-    [ -n "$line" ] && EXISTING_PIDS+=("$line")
-  done <<< "$pids"
-  http_log "list_projects: ${#EXISTING_PIDS[@]} active project(s) found"
-  return 0
 }
 
 # Cheap pre-flight: do they have an OPEN billing account (free-trial or paid)?
@@ -1494,23 +1448,22 @@ print_setup_needed() {
   echo ""
 }
 
-# Preflight (open billing account) gates further provisioning. Firebase
-# ToS gets caught later in add_firebase via PREFLIGHT_REASON=no_firebase_tos.
-if ! preflight_check; then
-  print_setup_needed "$EMAIL" "$PREFLIGHT_REASON"
-  exit 1
-fi
-
 # =====================================================================
-# 12. PROJECT CHOOSER + PROVISIONING ROWS
+# 12. PROVISIONING ROW UI (single list: sign-in → create → APIs)
 # =====================================================================
-
-# Provisioning items, paired in lockstep. Three label arrays mirror
-# state-appropriate phrasing:
+# All steps in one row UI so the user sees the whole journey from the
+# start. The first two rows are interactive (sign-in opens browser;
+# create-project asks for a name) and use ANSI insert/delete-line
+# escapes (\033[L / \033[M) to "open up" a sub-section between rows
+# for prompts and errors, then collapse it back when done.
+#
+# Three label arrays mirror state-appropriate phrasing:
 #   pending  "enable firebase api"        (infinitive — "to do")
 #   running  "enabling firebase api"      (gerund — "doing")
 #   done     "firebase api enabled"       (past — "done")
 PROV_PENDING=(
+  "browser sign-in"
+  "create google cloud project"
   "enable firebase api"
   "add firebase to project"
   "link billing account"
@@ -1534,6 +1487,8 @@ PROV_PENDING=(
   "configure auth providers"
 )
 PROV_RUNNING=(
+  "browser sign-in"
+  "creating google cloud project"
   "enabling firebase api"
   "adding firebase to project"
   "linking billing account"
@@ -1557,6 +1512,8 @@ PROV_RUNNING=(
   "configuring auth providers"
 )
 PROV_DONE=(
+  "signed in"
+  "google cloud project created"
   "firebase api enabled"
   "firebase added to project"
   "billing account linked"
@@ -1580,6 +1537,8 @@ PROV_DONE=(
   "auth providers configured"
 )
 PROV_FNS=(
+  "_prov_signin"
+  "_prov_create"
   "_prov_enable_firebase"
   "_prov_add_firebase"
   "_prov_link_billing"
@@ -1604,7 +1563,91 @@ PROV_FNS=(
 )
 PROV_N=${#PROV_PENDING[@]}
 
-# Wrappers — global $PID is set by the chooser before provisioning.
+# ---------------------------------------------------------------------
+# Interactive row wrappers — these manipulate the cursor to "open up"
+# a sub-section between two rows, do their thing in there, then close
+# the section before returning. Cursor must be at L0 (line after the
+# last row) on entry AND on exit.
+# ---------------------------------------------------------------------
+
+# Row 0: browser sign-in. Opens a 1-line section showing a static
+# message while node cmd-auth.mjs runs in the background. cmd-auth's
+# own progress goes to log; the user's visible cue is the browser
+# popping up.
+_prov_signin() {
+  local row_i=0
+  local up=$((PROV_N - row_i - 1))
+  printf '\033[%dA\033[1L' "$up"          # up to line after row, insert 1
+  printf '      opening browser, sign in there and come back'
+  local rc=0
+  ( cd "$IF_HOME" && node cmd-auth.mjs ) >> "$INSTALL_LOG" 2>&1 || rc=$?
+  printf '\r\033[1M'                       # delete the inserted line
+  if [ "$up" -gt 0 ]; then
+    printf '\033[%dB\r' "$up"              # back to L0
+  fi
+  if [ "$rc" -ne 0 ]; then return 1; fi
+  [ -f "$IF_HOME/.env.auth.json" ] || return 1
+  EMAIL=$(perl -MJSON::PP -e 'print decode_json(do { local $/; <STDIN> })->{email} // ""' < "$IF_HOME/.env.auth.json")
+  ACCESS_TOKEN=$(perl -MJSON::PP -e 'print decode_json(do { local $/; <STDIN> })->{tokens}{access_token} // ""' < "$IF_HOME/.env.auth.json")
+  [ -n "$EMAIL" ] && [ -n "$ACCESS_TOKEN" ] || return 1
+  log "n: signed in as $EMAIL"
+  # Pre-flight billing check, gated to before any project work.
+  if ! preflight_check; then
+    # Stash so provision_all can show the right hint after row goes ✗.
+    PROV_SIGNIN_PREFLIGHT_FAIL="$PREFLIGHT_REASON"
+    return 1
+  fi
+  return 0
+}
+
+# Row 1: create google cloud project. Opens a 2-line section
+# (line 1: error or blank; line 2: prompt). Each iteration redraws
+# both lines. On success closes the section; row label becomes
+# "google cloud project created".
+_prov_create() {
+  local row_i=1
+  local up=$((PROV_N - row_i - 1))
+  printf '\033[%dA\033[2L' "$up"           # up + insert 2 lines
+  # Cursor on line 1 of section (top).
+  PID=""
+  local candidate result msg combined err_msg=""
+  while [ -z "$PID" ]; do
+    # Line 1: error (or blank).
+    printf '\r\033[K'
+    [ -n "$err_msg" ] && printf '      ✗  %s' "$err_msg"
+    # Line 2: prompt. Move down 1 then \r.
+    printf '\033[1B\r\033[K      project id: '
+    read -r candidate </dev/tty || candidate=""
+    # `read` consumed enter — cursor moved to next line. Move back up
+    # 2 to line 1 so next iteration starts from a known position.
+    printf '\033[2A\r'
+    if ! validate_gcp_project_id "$candidate"; then
+      combined=$(IFS=', '; echo "${VALIDATION_ERRORS[*]}")
+      err_msg="$combined"
+      continue
+    fi
+    # Run create with a spinner on line 2.
+    printf '\033[1B\r\033[K      --->  creating %s' "$candidate"
+    result=$(create_project "$candidate")
+    printf '\r\033[K\033[1A\r'                # erase spinner, back up to line 1
+    case "$result" in
+      ok)     PID="$candidate" ;;
+      taken)  err_msg="$candidate is taken" ;;
+      quota)  err_msg="account project limit reached — delete an unused project at console.cloud.google.com" ;;
+      timeout) err_msg="create timed out for $candidate" ;;
+      err:*)  msg="${result#err:}"; err_msg="$msg" ;;
+      *)      err_msg="unexpected: $result" ;;
+    esac
+  done
+  # Close section: cursor on line 1, delete 2 lines.
+  printf '\033[2M'
+  if [ "$up" -gt 0 ]; then
+    printf '\033[%dB\r' "$up"
+  fi
+  return 0
+}
+
+# Wrappers for non-interactive rows — global $PID is set by _prov_create.
 _prov_enable_firebase()         { enable_api "$PID" firebase.googleapis.com 1; }
 _prov_add_firebase()            { add_firebase "$PID"; }
 _prov_link_billing()            { link_billing "$PID"; }
@@ -1650,6 +1693,8 @@ update_prov_row() {
   fi
 }
 
+PROV_SIGNIN_PREFLIGHT_FAIL=""
+
 provision_all() {
   local i fn rc
   for i in $(seq 0 $((PROV_N - 1))); do
@@ -1665,7 +1710,11 @@ provision_all() {
     else
       update_prov_row "$i" "failed"
       echo ""
-      if [ "$fn" = "_prov_add_firebase" ]; then
+      if [ -n "$PROV_SIGNIN_PREFLIGHT_FAIL" ]; then
+        # Sign-in succeeded but billing preflight failed — surface the
+        # one-time-setup hint with the right reason.
+        print_setup_needed "$EMAIL" "$PROV_SIGNIN_PREFLIGHT_FAIL"
+      elif [ "$fn" = "_prov_add_firebase" ]; then
         printf "✗  Failed to add firebase to the project. This most likely means\n   you haven't yet accepted the Firebase terms & conditions.\n"
         echo ""
         printf "Press any key to open the readme..."
@@ -1679,105 +1728,9 @@ provision_all() {
   return 0
 }
 
-# Same redraw-in-place pattern as the warning loop:
-#   - bad input → ✗ error(s) on the line(s) below; cursor jumps back up to the
-#     prompt line and erases it so the next iteration prompts cleanly. Errors
-#     stay visible underneath as a hint.
-#   - success → spinner overwrites the prompt line, then "✓ <pid> created"
-#     overwrites the spinner. The prompt line BECOMES the first bullet of the
-#     provisioning row UI; provision_all draws its own rows directly below.
-prompt_create_project() {
-  PID=""
-  local candidate result e msg n_err
-  while [ -z "$PID" ]; do
-    printf "project id: "
-    read -r candidate </dev/tty || candidate=""
-    # cursor at start of line BELOW the prompt
-
-    if ! validate_gcp_project_id "$candidate"; then
-      n_err=${#VALIDATION_ERRORS[@]}
-      for e in "${VALIDATION_ERRORS[@]}"; do
-        printf "\033[K✗  %s\n" "$e"
-      done
-      printf "\033[J"                          # nuke any stale lines below
-      printf "\033[%dF\033[K" "$((n_err + 1))" # back up to prompt line, erase it
-      continue
-    fi
-
-    # Replace the prompt line with the spinner.
-    printf "\033[1F\033[K--->  creating %s" "$candidate"
-    result=$(create_project "$candidate")
-    printf "\r\033[K"  # erase spinner; cursor at col 0 of (now-empty) prompt line
-
-    case "$result" in
-      ok)
-        # The done row sits where the prompt was. Clear stale errors below.
-        printf "✓     %s created\n\033[J" "$candidate"
-        PID="$candidate"
-        ;;
-      taken)
-        printf "\n\033[K✗  %s is taken\033[J\033[1F" "$candidate"
-        ;;
-      quota)
-        printf "\n\033[K✗  account project limit reached — delete an unused project at console.cloud.google.com\033[J\033[1F"
-        ;;
-      timeout)
-        printf "\n\033[K✗  create timed out for %s\033[J\033[1F" "$candidate"
-        ;;
-      err:*)
-        msg="${result#err:}"
-        printf "\n\033[K✗  %s\033[J\033[1F" "$msg"
-        ;;
-      *)
-        printf "\n\033[K✗  unexpected: %s\033[J\033[1F" "$result"
-        ;;
-    esac
-  done
-}
-
-# Pull existing projects so we can offer reuse alongside "create new".
-# Encouraged because (a) every Firebase-ToS-accepting user already has a
-# leftover "nothing-XXXXX" shell and (b) tests of provisioning logic
-# shouldn't need a fresh project each time.
-list_projects || true
-
-PID=""
-if [ ${#EXISTING_PIDS[@]} -eq 0 ]; then
-  prompt_create_project
-else
-  while [ -z "$PID" ]; do
-    echo "Pick a project to provision:"
-    echo ""
-    n=1
-    for p in "${EXISTING_PIDS[@]}"; do
-      printf "%d. %s\n" "$n" "$p"
-      n=$((n + 1))
-    done
-    printf "%d. + create a new project\n" "$n"
-    echo ""
-    printf "> "
-    read -r choice </dev/tty || choice=""
-
-    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "$n" ]; then
-      printf "✗  pick a number 1-%d\n\n" "$n"
-      continue
-    fi
-
-    if [ "$choice" -eq "$n" ]; then
-      echo ""
-      prompt_create_project
-    else
-      PID="${EXISTING_PIDS[$((choice - 1))]}"
-      echo ""
-      # 4-cell icon slot to match the provisioning rows below.
-      printf "✓     using %s\n" "$PID"
-    fi
-  done
-fi
-
-# No blank line here — the success line above (✓ <pid> created /
-# ✓ using <pid>) is intended as the first row of the provisioning
-# list. provision_all draws its remaining rows immediately below.
+# Run the row UI: sign-in → create project → enable APIs → configure.
+# All interactive parts handled by the row wrappers via insert/delete-
+# line cursor magic.
 if ! provision_all; then
   exit 1
 fi
@@ -1832,12 +1785,12 @@ _clone_template() {
          commit -q -m "initial: $PID from if template" )
 }
 
-# Copy the staged auth cred into the project (cp not mv — staging cred
-# stays for future `n` runs, so cmd-auth.mjs's probe → refresh flow
-# avoids browser consent next time).
-_copy_auth_cred() {
-  if [ -f "$TEMPLATE_STAGE/.env.auth.json" ]; then
-    cp "$TEMPLATE_STAGE/.env.auth.json" "$PROJECT_PATH/.env.auth.json"
+# Move (not copy) the auth cred from ~/.if/ into the project. We
+# deliberately don't keep a central copy — fresh sign-in per project,
+# each project owns its own cred for future `node cmd-deploy.mjs`.
+_move_auth_cred() {
+  if [ -f "$IF_HOME/.env.auth.json" ]; then
+    mv "$IF_HOME/.env.auth.json" "$PROJECT_PATH/.env.auth.json"
     chmod 600 "$PROJECT_PATH/.env.auth.json"
   fi
 }
@@ -1935,7 +1888,7 @@ echo ""
 heading "now: clone, install, deploy"
 echo ""
 _deploy_step "cloning if template into $PROJECT_PATH" _clone_template
-_deploy_step "copying auth cred into project" _copy_auth_cred
+_deploy_step "moving auth cred into project" _move_auth_cred
 _deploy_step "writing .env (PROJECT_ID, ACCOUNT_EMAIL)" _write_env
 _deploy_step "writing client/.env (firebase web config)" _write_client_env
 _deploy_step "seeding $EMAIL as initial allowed user" _seed_allowed_email
