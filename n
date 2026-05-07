@@ -1,0 +1,1957 @@
+#!/bin/bash
+#
+# n — almostawake.com installer + new-project provisioner.
+#
+# One curl, one script. Combines what used to be three (`i`, the
+# private install-dependencies, the private setup-project) into a
+# single entry point now that the if template repo is public —
+# no GitHub auth needed, no local staging clone.
+#
+#   curl -fsSL https://almostawake.com/n | bash
+#
+# Idempotent: re-runs skip already-installed pieces and go straight to
+# spinning up another project. Aliased to `n` once installed (~/.zshrc).
+#
+# SECTIONS (search "^# ====" for jumps):
+#    1. CONSTANTS, COLORS, BASIC HELPERS
+#    2. LOGGING + EXIT TRAP
+#    3. OS / ARCH DETECTION
+#    4. DETECT WHAT'S INSTALLED
+#    5. WELCOME BANNER + OPT-IN
+#    6. INSTALL HELPERS (git, gh, node, java, claude, chrome)
+#    7. CONFIGURE HELPERS (terminal, workspace, dock)
+#    8. ZSHRC MARKER BLOCK
+#    9. ROW UI + INSTALL/CONFIGURE ORCHESTRATOR
+#   10. SIGN IN (via template stage + cmd-auth.mjs)
+#   11. GCP/FIREBASE REST PLUMBING
+#   12. PROJECT CHOOSER + PROVISIONING ROWS
+#   13. CLONE TEMPLATE + ENV + SEED + DEPLOY
+#   14. PROJECT READY
+
+set -e
+
+# =====================================================================
+# 1. CONSTANTS, COLORS, BASIC HELPERS
+# =====================================================================
+
+IF_HOME="$HOME/.if"
+INSTALL_LOG="/tmp/if-install.log"
+HTTP_LOG="${HTTP_LOG:-/tmp/if-new.log}"
+TEMPLATE_REPO="https://github.com/almostawake/if.git"
+TEMPLATE_STAGE="$IF_HOME/template-stage"
+NODE_VERSION="22.11.0"
+JAVA_VERSION="21"
+MARKER_START="# >>> if install >>>"
+MARKER_END="# <<< if install <<<"
+
+mkdir -p "$IF_HOME"
+: > "$INSTALL_LOG"
+
+if [ -t 1 ]; then
+  C_RED=$'\033[31m'; C_GRAY=$'\033[90m'
+  # 256-colour palette, matched depth on light terminals. Truecolor
+  # (\033[38;2;...) was tried but Terminal.app misrenders it as bright
+  # magenta, so we use 256-colour mode.
+  #   blue  = idx 17 (#00005f, deep navy / midnight blue)
+  #   green = idx 22 (#005f00, dark forest green — matched depth to blue)
+  C_BLU=$'\033[38;5;17m'
+  C_GRN=$'\033[38;5;22m'
+  C_BLD=$'\033[1m'; C_RST=$'\033[0m'
+else
+  C_RED=""; C_GRN=""; C_GRAY=""; C_BLU=""; C_BLD=""; C_RST=""
+fi
+
+say()     { printf '%s\n' "$*"; }
+die()     { printf "${C_RED}error:${C_RST} %s\n" "$*" >&2; exit 1; }
+heading() { printf "${C_BLD}${C_BLU}%s${C_RST}\n" "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"; }
+
+prompt_yn() {
+  local q="$1" def="$2" hint answer
+  if [ "$def" = "Y" ]; then hint="[Y/n]"; else hint="[y/N]"; fi
+  printf '%s %s ' "$q" "$hint"
+  read -r answer </dev/tty || answer=""
+  [ -z "$answer" ] && answer="$def"
+  case "$answer" in [Yy]*) return 0 ;; *) return 1 ;; esac
+}
+
+# Open URL via the Chrome-with-Claude-Code launcher when present (lands
+# in the Claude profile so dev tooling sees it). Falls back to system
+# default browser pre-install or on Linux.
+chrome_open() {
+  local url="$1"
+  local launcher="$HOME/Applications/Chrome with Claude Code.app/Contents/MacOS/Chrome with Claude Code"
+  if [ -x "$launcher" ]; then
+    "$launcher" "$url" >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+    return 0
+  fi
+  if command -v open >/dev/null 2>&1; then open "$url"
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$url"
+  fi
+}
+
+# =====================================================================
+# 2. LOGGING + EXIT TRAP
+# =====================================================================
+
+log()       { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*" >> "$INSTALL_LOG"; }
+http_log()  { printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*" >> "$HTTP_LOG"; }
+log_trunc() { printf '%s' "$1" | tr '\n' ' ' | cut -c1-1000; }
+
+# Surface log tail on abnormal exit — the only way to tell where we hung
+# when the row UI just shows a spinner.
+trap '_rc=$?; if [ $_rc -ne 0 ]; then
+  printf "\n\n--- last 40 lines of %s ---\n" "$INSTALL_LOG" >&2
+  tail -n 40 "$INSTALL_LOG" >&2
+  printf "\n(full log: %s)\n" "$INSTALL_LOG" >&2
+fi' EXIT
+
+log "n: script start (pid=$$, user=$USER, shell=$SHELL)"
+log "n: HOME=$HOME IF_HOME=$IF_HOME"
+
+# =====================================================================
+# 3. OS / ARCH DETECTION
+# =====================================================================
+
+detect_os_arch() {
+  case "$(uname -s)" in
+    Darwin) OS="darwin" ;;
+    Linux)  OS="linux"  ;;
+    *) die "unsupported OS: $(uname -s) — supports macOS and Linux only" ;;
+  esac
+  case "$(uname -m)" in
+    arm64|aarch64) ARCH="arm64" ;;
+    x86_64|amd64)  ARCH="x64"   ;;
+    *) die "unsupported architecture: $(uname -m)" ;;
+  esac
+  export OS ARCH
+}
+detect_os_arch
+log "n: detected OS=$OS ARCH=$ARCH"
+
+MACOS_CODENAME=""
+if [ "$OS" = "darwin" ]; then
+  case "$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)" in
+    14) MACOS_CODENAME="sonoma"  ;;
+    15) MACOS_CODENAME="sequoia" ;;
+    26) MACOS_CODENAME="tahoe"   ;;
+  esac
+fi
+
+# Keep ~/ clean: route npm cache + Claude state under ~/.if/.
+mkdir -p "$IF_HOME/npm-cache" "$IF_HOME/claude-config"
+export NPM_CONFIG_CACHE="$IF_HOME/npm-cache"
+export CLAUDE_CONFIG_DIR="$IF_HOME/claude-config"
+
+# =====================================================================
+# 4. DETECT WHAT'S INSTALLED
+# =====================================================================
+# Probes the contained install path first, then PATH. We run in a
+# fresh non-interactive bash (curl | bash doesn't source rc files), so
+# PATH usually doesn't include $IF_HOME/{node,java,claude,git,gh}/bin
+# even when those installs exist — relying on `command -v` alone made
+# the script re-install on every run.
+
+have_git=false
+if [ -x "$IF_HOME/git/bin/git" ]; then
+  # Wrapper presence (git.real) is our sentinel for a healthy install.
+  # An older bottle-only install without the wrapper is broken under
+  # gh/hardened callers — re-install to lay down the wrapper.
+  if [ -x "$IF_HOME/git/bin/git.real" ]; then
+    have_git=true
+  fi
+else
+  git_path="$(command -v git 2>/dev/null || true)"
+  if [ -n "$git_path" ]; then
+    case "$git_path" in
+      /usr/bin/git)
+        # macOS ships /usr/bin/git as a stub that triggers the CLT install
+        # dialog when invoked. Real only once Xcode CLT/app is installed.
+        xcode-select -p >/dev/null 2>&1 && have_git=true
+        ;;
+      *) have_git=true ;;
+    esac
+  fi
+fi
+
+have_gh=false
+if [ -x "$IF_HOME/gh/bin/gh" ]; then
+  have_gh=true
+elif command -v gh >/dev/null 2>&1; then
+  have_gh=true
+fi
+
+have_node22=false
+node_bin=""
+if   [ -x "$IF_HOME/node/bin/node" ]; then node_bin="$IF_HOME/node/bin/node"
+elif command -v node >/dev/null 2>&1;  then node_bin="node"
+fi
+if [ -n "$node_bin" ]; then
+  nm="$("$node_bin" -v 2>/dev/null | sed 's/v//' | cut -d. -f1)"
+  [ -n "$nm" ] && [ "$nm" -ge 22 ] 2>/dev/null && have_node22=true
+fi
+
+have_java21=false
+java_bin=""
+# Adoptium ships .jdk-shaped trees on macOS (Contents/Home/bin/java) and
+# flat trees on Linux (bin/java). Check both.
+if   [ -x "$IF_HOME/java/Contents/Home/bin/java" ]; then java_bin="$IF_HOME/java/Contents/Home/bin/java"
+elif [ -x "$IF_HOME/java/bin/java" ];               then java_bin="$IF_HOME/java/bin/java"
+elif command -v java >/dev/null 2>&1;               then java_bin="java"
+fi
+if [ -n "$java_bin" ]; then
+  jm="$("$java_bin" -version 2>&1 | awk -F '"' '/version/ {print $2}' | cut -d. -f1)"
+  [ -n "$jm" ] && [ "$jm" -ge 21 ] 2>/dev/null && have_java21=true
+fi
+
+have_claude=false
+if   [ -x "$IF_HOME/claude/bin/claude" ]; then have_claude=true
+elif command -v claude >/dev/null 2>&1;   then have_claude=true
+fi
+
+# Chrome row represents Chrome.app + Claude-connected launcher together —
+# only "installed" when both exist.
+have_chrome=false
+if [ "$OS" = "darwin" ]; then
+  if [ -d "$HOME/Applications/Chrome with Claude Code.app" ] && \
+     { [ -d "$HOME/Applications/Google Chrome.app" ] || \
+       [ -d "/Applications/Google Chrome.app" ]; }; then
+    have_chrome=true
+  fi
+fi
+
+log "n: detection — git=$have_git gh=$have_gh node22=$have_node22 java21=$have_java21 claude=$have_claude chrome=$have_chrome"
+
+# Drive welcome / install-section visibility off this. Re-runs (everything
+# already installed) skip welcome + install rows + configure entirely and
+# go straight to project setup.
+ITEMS=("git" "gh" "node 22" "java 21" "claude code [in YOLO mode]" "chrome [connected to Claude]")
+INSTALL_FNS=("_install_git" "_install_gh" "_install_node" "_install_java" "_install_claude" "_install_chrome")
+INSTALLED=("$have_git" "$have_gh" "$have_node22" "$have_java21" "$have_claude" "$have_chrome")
+N=${#ITEMS[@]}
+
+N_TODO=0
+for x in "${INSTALLED[@]}"; do [ "$x" = "false" ] && N_TODO=$((N_TODO + 1)); done
+
+# =====================================================================
+# 5. WELCOME BANNER + OPT-IN
+# =====================================================================
+# First-time only. Re-runs (N_TODO == 0) skip straight to project setup.
+
+if [ "$N_TODO" -gt 0 ]; then
+  cat <<BANNER
+
+${C_BLD}${C_BLU}┌─────────────────────────────────────────────────────────────────────┐
+│                     welcome, impatient futurist                     │
+└─────────────────────────────────────────────────────────────────────┘${C_RST}
+
+BANNER
+  cat <<PLAN
+Let's save you a few months of pain and suffering by installing
+everything you need in a couple of minutes. When we're done you'll
+be able to kick off your first project, which will be live in
+another few minutes.
+
+PLAN
+  if ! prompt_yn "Ready to go?" "Y"; then
+    say ""
+    say "no changes made. goodbye."
+    exit 0
+  fi
+fi
+
+# =====================================================================
+# 6. INSTALL HELPERS
+# =====================================================================
+
+# git — ARM downloads our pre-built bundle (~27MB compressed); Intel
+# falls back to xcode-select.
+_install_git() {
+  log "_install_git: enter (OS=$OS ARCH=$ARCH)"
+  if [ "$OS" = "darwin" ] && [ "$ARCH" = "arm64" ]; then
+    if _install_git_bundle; then
+      log "_install_git: bundle path succeeded"
+      return 0
+    fi
+    log "_install_git: bundle failed, falling through to xcode-select"
+  fi
+  _install_git_xcode
+}
+
+# Single tar.gz: bin/git wrapper + bin/git.real + bin/* helpers,
+# libexec/git-core/* (~180 helpers), lib/*.dylib (libpcre2, libintl,
+# libcurl + closure: libssl, libcrypto, libnghttp2, libnghttp3,
+# libngtcp2 + libngtcp2_crypto_ossl, libssh2, libbrotli{dec,common},
+# libzstd). Wrapper sets DYLD_LIBRARY_PATH (override), GIT_EXEC_PATH,
+# SSL_CERT_FILE, CURL_CA_BUNDLE so git-remote-http resolves dylibs and
+# TLS roots correctly even when invoked from hardened parents (gh)
+# that strip DYLD_* env vars.
+#
+# Built on Sonoma 14.1 arm64. tar -xz applies no quarantine xattr, so
+# dyld doesn't see Gatekeeper warnings on first load. If the bundle's
+# ad-hoc-signed dylibs get rejected on a stricter macOS (Tahoe enforces
+# library-validation more strictly than Sonoma), the smoke test fails
+# and we fall through to xcode-select.
+_install_git_bundle() {
+  log "_install_git_bundle: enter"
+  rm -rf "$IF_HOME/git"
+  log "_install_git_bundle: curl|tar starting"
+  # curl exit code is fatal (network failure → no point smoke-testing).
+  # tar exit code is advisory: BSD tar warns "Failed to restore metadata"
+  # for system-set xattrs (com.apple.provenance) on symlinks but the
+  # data extracts fine. We rely on smoke tests to decide success.
+  curl -fsSL https://almostawake.com/git-sonoma.tar.gz | tar -xz -C "$IF_HOME"
+  local cs=("${PIPESTATUS[@]}")
+  log "_install_git_bundle: curl|tar returned curl=${cs[0]} tar=${cs[1]}"
+  if [ "${cs[0]}" -ne 0 ]; then
+    log "_install_git_bundle: curl failed — aborting"
+    return 1
+  fi
+  log "_install_git_bundle: smoke --version"
+  if ! "$IF_HOME/git/bin/git" --version >>"$INSTALL_LOG" 2>&1; then
+    log "_install_git_bundle: --version failed"
+    return 1
+  fi
+  log "_install_git_bundle: smoke ls-remote"
+  if ! "$IF_HOME/git/bin/git" ls-remote https://github.com/octocat/Hello-World.git HEAD >>"$INSTALL_LOG" 2>&1; then
+    log "_install_git_bundle: ls-remote failed"
+    return 1
+  fi
+  log "_install_git_bundle: success"
+}
+
+_install_git_xcode() {
+  log "_install_git_xcode: enter"
+  if xcode-select -p >/dev/null 2>&1; then
+    log "_install_git_xcode: already installed"
+    return 0
+  fi
+  log "_install_git_xcode: triggering xcode-select --install (will block on dialog)"
+  xcode-select --install 2>/dev/null || true
+  while ! xcode-select -p >/dev/null 2>&1; do sleep 10; done
+  log "_install_git_xcode: xcode-select now reports installed"
+}
+
+_install_gh() {
+  log "_install_gh: enter"
+  local arch_gh
+  case "$ARCH" in
+    arm64) arch_gh="arm64" ;;
+    x64)   arch_gh="amd64" ;;
+    *) die "gh: unsupported arch $ARCH" ;;
+  esac
+  local url
+  log "_install_gh: querying latest release"
+  url=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest \
+    | perl -MJSON::PP -e "
+        my \$j = decode_json(join('', <STDIN>));
+        for my \$a (@{\$j->{assets}}) {
+          next unless ref(\$a) eq 'HASH';
+          if ((\$a->{name} // '') =~ /^gh_.*_macOS_${arch_gh}\\.zip\$/) {
+            print \$a->{browser_download_url};
+            last;
+          }
+        }")
+  [ -z "$url" ] && die "gh: couldn't find release asset"
+  log "_install_gh: url=$url"
+  local tmp_zip tmp_dir
+  tmp_zip=$(mktemp -u).zip
+  tmp_dir=$(mktemp -d)
+  log "_install_gh: downloading"
+  curl -fsSL "$url" -o "$tmp_zip"
+  log "_install_gh: unzipping"
+  unzip -q "$tmp_zip" -d "$tmp_dir"
+  rm -rf "$IF_HOME/gh"
+  mv "$(ls -d "$tmp_dir"/*/)" "$IF_HOME/gh"
+  rm -rf "$tmp_zip" "$tmp_dir"
+  log "_install_gh: done"
+}
+
+_install_node() {
+  mkdir -p "$IF_HOME/node"
+  local plat ext url
+  case "$OS-$ARCH" in
+    darwin-arm64) plat="darwin-arm64"; ext="tar.gz" ;;
+    darwin-x64)   plat="darwin-x64";   ext="tar.gz" ;;
+    linux-x64)    plat="linux-x64";    ext="tar.xz" ;;
+    *) die "unsupported platform for Node: $OS-$ARCH" ;;
+  esac
+  url="https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-$plat.$ext"
+  if [ "$ext" = "tar.xz" ]; then
+    curl -fsSL "$url" | tar -xJ -C "$IF_HOME/node" --strip-components=1
+  else
+    curl -fsSL "$url" | tar -xz -C "$IF_HOME/node" --strip-components=1
+  fi
+  export PATH="$IF_HOME/node/bin:$PATH"
+}
+
+_install_java() {
+  mkdir -p "$IF_HOME/java"
+  local jplat jurl
+  case "$OS-$ARCH" in
+    darwin-arm64) jplat="mac/aarch64" ;;
+    darwin-x64)   jplat="mac/x64"     ;;
+    linux-x64)    jplat="linux/x64"   ;;
+    *) die "unsupported platform for Java: $OS-$ARCH" ;;
+  esac
+  jurl="https://api.adoptium.net/v3/binary/latest/$JAVA_VERSION/ga/$jplat/jre/hotspot/normal/eclipse"
+  curl -fsSL "$jurl" | tar -xz -C "$IF_HOME/java" --strip-components=1
+  if [ "$OS" = "darwin" ]; then
+    export JAVA_HOME="$IF_HOME/java/Contents/Home"
+  else
+    export JAVA_HOME="$IF_HOME/java"
+  fi
+  export PATH="$JAVA_HOME/bin:$PATH"
+}
+
+# Claude Code binary + YOLO config files. Theme is auto-picked from
+# the user's macOS appearance on first install only — re-runs preserve
+# whatever theme the user later picked via Claude's /theme command.
+_install_claude() {
+  mkdir -p "$IF_HOME/claude"
+  export PATH="$IF_HOME/claude/bin:$PATH"
+  npm install --prefix "$IF_HOME/claude" -g @anthropic-ai/claude-code
+
+  mkdir -p "$IF_HOME/claude-config/.claude"
+  # Seed config files from the bundled assets curl'd from our website.
+  # Fetched on demand (rather than baked into this script) so we can
+  # update them without bumping n.
+  local base="https://almostawake.com"
+  [ -f "$IF_HOME/claude-config/.claude/CLAUDE.md" ] || \
+    curl -fsSL "$base/assets/claude.md" -o "$IF_HOME/claude-config/.claude/CLAUDE.md"
+  [ -f "$IF_HOME/claude-config/.claude/settings.json" ] || \
+    curl -fsSL "$base/assets/claude-settings.json" -o "$IF_HOME/claude-config/.claude/settings.json"
+
+  local claude_json="$IF_HOME/claude-config/.claude.json"
+  if [ ! -f "$claude_json" ]; then
+    curl -fsSL "$base/assets/claude.json" -o "$claude_json"
+    if [ "$OS" = "darwin" ]; then
+      local theme="light"
+      defaults read -g AppleInterfaceStyle 2>/dev/null | grep -q Dark && theme="dark"
+      local tmp; tmp=$(mktemp)
+      THEME="$theme" perl -MJSON::PP -e '
+        local $/;
+        my $j = decode_json(<STDIN>);
+        $j->{theme} = $ENV{THEME};
+        print JSON::PP->new->pretty->canonical->encode($j);
+      ' < "$claude_json" > "$tmp" && mv "$tmp" "$claude_json"
+    fi
+  fi
+}
+
+# Chrome Stable + Chrome with Claude Code.app launcher.
+_install_chrome() {
+  _log() { echo "[$(date +%H:%M:%S)] chrome: $*"; }
+  _log "start"
+  [ "$OS" = "darwin" ] || { _log "not darwin, skipping"; return 0; }
+
+  # 1. Install Chrome.app (skip if already present anywhere)
+  local chrome_app=""
+  [ -d "/Applications/Google Chrome.app" ]      && chrome_app="/Applications/Google Chrome.app"
+  [ -d "$HOME/Applications/Google Chrome.app" ] && chrome_app="$HOME/Applications/Google Chrome.app"
+  _log "existing chrome_app = [$chrome_app]"
+
+  if [ -z "$chrome_app" ]; then
+    local dmg; dmg=$(mktemp -u).dmg
+    local mountpoint
+    _log "downloading Chrome DMG to $dmg (~200MB)…"
+    if ! curl -fSL --progress-bar \
+         "https://dl.google.com/chrome/mac/universal/stable/GGRO/googlechrome.dmg" \
+         -o "$dmg"; then
+      _log "curl failed: exit=$?"
+      rm -f "$dmg"
+      return 1
+    fi
+    _log "DMG size: $(ls -la "$dmg" | awk '{print $5}') bytes"
+
+    _log "hdiutil attach…"
+    local attach_out
+    attach_out=$(hdiutil attach "$dmg" -nobrowse -noverify -noautoopen 2>&1)
+    _log "hdiutil output:"
+    printf '%s\n' "$attach_out" | sed 's/^/    /'
+    mountpoint=$(printf '%s' "$attach_out" \
+      | awk '/\/Volumes\// { for (i=3; i<=NF; i++) printf "%s ", $i; print "" }' \
+      | sed 's/ *$//' | head -1)
+    _log "parsed mountpoint = [$mountpoint]"
+
+    if [ -z "$mountpoint" ] || [ ! -d "$mountpoint/Google Chrome.app" ]; then
+      _log "mount FAILED — mountpoint empty or Google Chrome.app missing at [$mountpoint]"
+      [ -n "$mountpoint" ] && hdiutil detach "$mountpoint" -force -quiet 2>/dev/null || true
+      rm -f "$dmg"
+      return 1
+    fi
+
+    mkdir -p "$HOME/Applications"
+    rm -rf "$HOME/Applications/Google Chrome.app"
+    _log "cp Chrome.app from $mountpoint to ~/Applications/"
+    cp -R "$mountpoint/Google Chrome.app" "$HOME/Applications/"
+    xattr -dr com.apple.quarantine "$HOME/Applications/Google Chrome.app" 2>/dev/null || true
+    _log "detaching DMG"
+    hdiutil detach "$mountpoint" -quiet 2>/dev/null \
+      || hdiutil detach "$mountpoint" -force -quiet 2>/dev/null \
+      || true
+    rm -f "$dmg"
+    chrome_app="$HOME/Applications/Google Chrome.app"
+    _log "chrome_app now = $chrome_app"
+  fi
+
+  # 2. Build/rebuild the launcher (always, so flag changes take effect on re-runs).
+  local launcher_app="$HOME/Applications/Chrome with Claude Code.app"
+  mkdir -p "$HOME/Applications"
+  rm -rf "$launcher_app"
+  mkdir -p "$launcher_app/Contents/MacOS"
+  mkdir -p "$launcher_app/Contents/Resources"
+  cp "$chrome_app/Contents/Resources/app.icns" "$launcher_app/Contents/Resources/app.icns" 2>/dev/null || true
+
+  cat > "$launcher_app/Contents/Info.plist" <<'CHROMEPLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>Chrome with Claude Code</string>
+  <key>CFBundleDisplayName</key>
+  <string>Chrome with Claude Code</string>
+  <key>CFBundleExecutable</key>
+  <string>Chrome with Claude Code</string>
+  <key>CFBundleIconFile</key>
+  <string>app</string>
+  <key>CFBundleIconName</key>
+  <string>app</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.almostawake.if.chrome-claude-code</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleVersion</key>
+  <string>1.0</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>10.15</string>
+  <key>LSRequiresNativeExecution</key>
+  <true/>
+  <key>LSArchitecturePriority</key>
+  <array>
+    <string>arm64</string>
+  </array>
+</dict>
+</plist>
+CHROMEPLIST
+
+  cat > "$launcher_app/Contents/MacOS/Chrome with Claude Code" <<CHROMELAUNCH
+#!/bin/bash
+# No kill-Chrome dance needed: Chrome with a different --user-data-dir
+# coexists fine with the user's regular Chrome. If Chrome-Claude is
+# already running, Chrome's process-singleton sends activation to the
+# existing instance (URL args become tabs there); the new process exits
+# immediately. Debug port stays alive either way.
+
+PROFILE="\$HOME/Library/Application Support/Google/Chrome-Claude"
+
+"$chrome_app/Contents/MacOS/Google Chrome" \\
+  --remote-debugging-port=9222 \\
+  --silent-debugger-extension-api \\
+  --user-data-dir="\$PROFILE" \\
+  "\$@" &>/dev/null &
+
+# Wait up to 10s for the debug port. Returns near-instantly if already
+# running; cold start takes ~2-4s.
+for i in \$(seq 1 20); do
+  sleep 0.5
+  curl -s http://localhost:9222/json/version >/dev/null 2>&1 && break
+done
+
+# Drop a DevToolsActivePort file where the chrome-devtools MCP server
+# looks for it (mirrors Chrome's default-profile behavior so MCP
+# discovery "just works").
+mkdir -p "\$HOME/Library/Application Support/Google/Chrome"
+wspath=\$(curl -s http://localhost:9222/json/version | \\
+  perl -MJSON::PP -e 'my \$j=decode_json(join("",<STDIN>)); my \$u=\$j->{webSocketDebuggerUrl} // ""; my (\$p) = \$u =~ m{:9222(.*)}; print \$p // ""')
+printf '9222\n'"\${wspath}" > "\$HOME/Library/Application Support/Google/Chrome/DevToolsActivePort"
+CHROMELAUNCH
+  chmod +x "$launcher_app/Contents/MacOS/Chrome with Claude Code"
+  touch "$launcher_app"
+}
+
+# =====================================================================
+# 7. CONFIGURE HELPERS (terminal, workspace, dock)
+# =====================================================================
+
+# Pre-configure Terminal.app so Option-Enter inserts a newline (what
+# "shift-enter" in Claude Code actually needs).
+_configure_terminal() {
+  [ "$OS" = "darwin" ] || return 0
+  local plist="$HOME/Library/Preferences/com.apple.Terminal.plist"
+  [ -f "$plist" ] || return 0
+  [ -f "${plist}.bak" ] || cp "$plist" "${plist}.bak"
+  local profile
+  profile=$(defaults read com.apple.Terminal "Default Window Settings" 2>/dev/null || echo "Basic")
+  plutil -insert  "Window Settings.${profile}.useOptionAsMetaKey" -bool YES "$plist" 2>/dev/null \
+    || plutil -replace "Window Settings.${profile}.useOptionAsMetaKey" -bool YES "$plist" 2>/dev/null \
+    || true
+}
+
+# Dock helper: delete any :persistent-apps entry whose _CFURLString == $1.
+_dock_apps_remove_url() {
+  local target="$1"
+  local plist="$HOME/Library/Preferences/com.apple.dock.plist"
+  [ -f "$plist" ] || return 0
+  local i=0
+  while /usr/libexec/PlistBuddy -c "Print :persistent-apps:$i" "$plist" >/dev/null 2>&1; do
+    i=$((i+1))
+  done
+  i=$((i-1))
+  while [ $i -ge 0 ]; do
+    local u
+    u=$(/usr/libexec/PlistBuddy -c "Print :persistent-apps:$i:tile-data:file-data:_CFURLString" "$plist" 2>/dev/null || true)
+    if [ "$u" = "$target" ]; then
+      /usr/libexec/PlistBuddy -c "Delete :persistent-apps:$i" "$plist" 2>/dev/null || true
+    fi
+    i=$((i-1))
+  done
+  return 0
+}
+
+# Dock helper: prepend a new :persistent-apps entry at slot 0 for URL $1.
+# Used in reverse order so final slot assignment lines up left-to-right.
+_dock_apps_insert_at_zero() {
+  local url="$1"
+  local plist="$HOME/Library/Preferences/com.apple.dock.plist"
+  echo "_dock_apps_insert_at_zero: $url"
+  /usr/libexec/PlistBuddy -c "Add :persistent-apps:0 dict" "$plist" || true
+  /usr/libexec/PlistBuddy -c "Add :persistent-apps:0:tile-data dict" "$plist" || true
+  /usr/libexec/PlistBuddy -c "Add :persistent-apps:0:tile-data:file-data dict" "$plist" || true
+  /usr/libexec/PlistBuddy -c "Add :persistent-apps:0:tile-data:file-data:_CFURLString string ${url}" "$plist" || true
+  /usr/libexec/PlistBuddy -c "Add :persistent-apps:0:tile-data:file-data:_CFURLStringType integer 15" "$plist" || true
+  /usr/libexec/PlistBuddy -c "Add :persistent-apps:0:tile-type string file-tile" "$plist" || true
+  return 0
+}
+
+# Create ~/if workspace, point Finder there, pin to Dock, enable
+# "Claude Code at Folder" + "New Terminal at Folder" Quick Actions.
+#
+# Why ~/if and not ~/: running claude in ~ makes it enumerate Documents,
+# Downloads, Photos Library, Reminders, etc., which fires macOS TCC
+# prompts. An empty work dir avoids all of that.
+_configure_workspace() {
+  [ "$OS" = "darwin" ] || return 0
+  mkdir -p "$HOME/if"
+
+  # Build IF Terminal.app via osacompile — proper applet bundle whose
+  # executable IS a native Mach-O binary (the system applet runtime).
+  # Why not a shell-script .app: macOS probes Contents/MacOS for a
+  # Mach-O header to decide whether to offer Rosetta; scripts fail that
+  # probe and trigger the Rosetta prompt even with LSRequiresNativeExecution
+  # + arm64-only LSArchitecturePriority. osacompile sidesteps it — the
+  # applet binary is universal. The body uses `do shell script` +
+  # `open -a Terminal.app` (LaunchServices, no Apple Events TCC prompt).
+  local if_term="$HOME/Applications/IF Terminal.app"
+  rm -rf "$if_term"
+  local tmp_scpt; tmp_scpt=$(mktemp).scpt
+  cat > "$tmp_scpt" <<'IFTERMSCPT'
+do shell script "open -a Terminal.app ~/if"
+IFTERMSCPT
+  osacompile -o "$if_term" "$tmp_scpt"
+  rm -f "$tmp_scpt"
+
+  local term_icns=""
+  for candidate in \
+      "/System/Applications/Utilities/Terminal.app/Contents/Resources/Terminal.icns" \
+      "/Applications/Utilities/Terminal.app/Contents/Resources/Terminal.icns" ; do
+    if [ -f "$candidate" ]; then term_icns="$candidate"; break; fi
+  done
+  if [ -z "$term_icns" ]; then
+    local term_app
+    term_app=$(mdfind "kMDItemCFBundleIdentifier == 'com.apple.Terminal'" 2>/dev/null | head -1)
+    [ -n "$term_app" ] && [ -f "$term_app/Contents/Resources/Terminal.icns" ] \
+      && term_icns="$term_app/Contents/Resources/Terminal.icns"
+  fi
+  [ -n "$term_icns" ] && cp "$term_icns" "$if_term/Contents/Resources/applet.icns"
+
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.almostawake.if.terminal" \
+    "$if_term/Contents/Info.plist" 2>/dev/null || true
+
+  # Bumping mtime forces LaunchServices/Dock to re-register the icon.
+  touch "$if_term"
+
+  # Install "Claude Code at Folder" Finder Quick Action. The .workflow
+  # bundle was built once in Automator; we unzip it into ~/Library/Services/
+  # and `pbs -update` below makes it show in the Finder right-click menu.
+  mkdir -p "$HOME/Library/Services"
+  rm -rf "$HOME/Library/Services/Claude Code at Folder.workflow"
+  local quick_action_zip
+  quick_action_zip=$(mktemp -u).zip
+  if curl -fsSL https://almostawake.com/assets/quick-action.zip -o "$quick_action_zip" 2>/dev/null; then
+    unzip -q -o "$quick_action_zip" -d "$HOME/Library/Services/" || true
+    rm -rf "$HOME/Library/Services/__MACOSX"
+    rm -f "$quick_action_zip"
+  fi
+
+  # === Pass 1: defaults write (cfprefsd in-memory cache) ===
+
+  # New Finder windows default to ~/if — covers right-click New Folder
+  # + right-click New Terminal at Folder workflow.
+  defaults write com.apple.finder NewWindowTarget -string "PfLo" 2>/dev/null || true
+  defaults write com.apple.finder NewWindowTargetPath -string "file://$HOME/if/" 2>/dev/null || true
+
+  # Clean Dock: kill the Recents shelf so the right side doesn't fill
+  # with whatever they happen to launch.
+  defaults write com.apple.dock show-recents -bool false 2>/dev/null || true
+
+  # === Flush cfprefsd ===
+  # Force cfprefsd to flush its cache to disk before PlistBuddy edits the
+  # dock plist. Without this, PlistBuddy's Save overwrites the file with
+  # its stale on-disk view, losing the `defaults` writes.
+  killall cfprefsd 2>/dev/null || true
+  sleep 0.3
+
+  # === Pass 2: PlistBuddy edits on disk ===
+
+  # Strip the default Dock back to Safari + System Settings before
+  # adding our entries. Walk persistent-apps in reverse so deletes
+  # don't shift indices. Identity by bundle-identifier (more stable
+  # than _CFURLString — that varies across macOS versions).
+  local DOCK_PLIST="$HOME/Library/Preferences/com.apple.dock.plist"
+  if [ -f "$DOCK_PLIST" ]; then
+    local i bid
+    i=0
+    while /usr/libexec/PlistBuddy -c "Print :persistent-apps:$i" "$DOCK_PLIST" >/dev/null 2>&1; do
+      i=$((i+1))
+    done
+    i=$((i-1))
+    while [ "$i" -ge 0 ]; do
+      bid=$(/usr/libexec/PlistBuddy -c "Print :persistent-apps:$i:tile-data:bundle-identifier" "$DOCK_PLIST" 2>/dev/null || true)
+      case "$bid" in
+        com.apple.Safari|com.apple.systempreferences) : ;;
+        *) /usr/libexec/PlistBuddy -c "Delete :persistent-apps:$i" "$DOCK_PLIST" 2>/dev/null || true ;;
+      esac
+      i=$((i-1))
+    done
+
+    # Nuke right-side stacks (Downloads etc.) for a clean right side.
+    i=0
+    while /usr/libexec/PlistBuddy -c "Print :persistent-others:$i" "$DOCK_PLIST" >/dev/null 2>&1; do
+      i=$((i+1))
+    done
+    i=$((i-1))
+    while [ "$i" -ge 0 ]; do
+      /usr/libexec/PlistBuddy -c "Delete :persistent-others:$i" "$DOCK_PLIST" 2>/dev/null || true
+      i=$((i-1))
+    done
+  fi
+
+  # Dock left side, immediately right of Finder:
+  #   slot 0 — Chrome with Claude Code (debug-port-enabled launcher)
+  #   slot 1 — IF Terminal (opens new Terminal in ~/if)
+  # Prepend in reverse order so final L-R is [chrome, term, ...rest].
+  # Also remove the legacy shell.command URL so upgrading installs
+  # don't leave a stale Dock entry.
+  local url_chrome="file://$HOME/Applications/Chrome%20with%20Claude%20Code.app/"
+  local url_term="file://$HOME/Applications/IF%20Terminal.app/"
+  local url_shell_legacy="file://$HOME/.if/bin/shell.command"
+  _dock_apps_remove_url "$url_chrome"
+  _dock_apps_remove_url "$url_term"
+  _dock_apps_remove_url "$url_shell_legacy"
+  _dock_apps_insert_at_zero "$url_term"
+  _dock_apps_insert_at_zero "$url_chrome"
+
+  # Apply Dock changes. Don't killall Finder — relaunch steals focus
+  # from Terminal, making Claude's first-run "Trust this folder" prompt
+  # unreachable. Prefs apply to next Cmd-N anyway.
+  killall Dock 2>/dev/null || true
+
+  # === Services: register, then force-enable ===
+  /System/Library/CoreServices/pbs -update 2>/dev/null || true
+  sleep 0.5
+
+  # Flush cfprefsd so its cache of pbs.plist is discarded.
+  killall cfprefsd 2>/dev/null || true
+  sleep 0.3
+
+  # Edit pbs.plist directly on disk. The defaults-write route through
+  # cfprefsd silently reverts (cfprefsd cache vs pbs writes fight).
+  # Going straight to disk wins. Schema matches what macOS writes when
+  # the user manually ticks the Quick Actions checkbox.
+  local pbs_plist="$HOME/Library/Preferences/pbs.plist"
+  if [ -f "$pbs_plist" ]; then
+    local key
+    for key in \
+        "com.apple.Terminal - Open Terminal at Folder - openTerminal" \
+        "(null) - Claude Code at Folder - runWorkflowAsService" ; do
+      /usr/libexec/PlistBuddy -c "Delete :NSServicesStatus:'${key}'" "$pbs_plist" 2>/dev/null || true
+      /usr/libexec/PlistBuddy -c "Add :NSServicesStatus:'${key}' dict" "$pbs_plist"
+      /usr/libexec/PlistBuddy -c "Add :NSServicesStatus:'${key}':presentation_modes dict" "$pbs_plist"
+      /usr/libexec/PlistBuddy -c "Add :NSServicesStatus:'${key}':presentation_modes:ContextMenu integer 1" "$pbs_plist"
+      /usr/libexec/PlistBuddy -c "Add :NSServicesStatus:'${key}':presentation_modes:FinderPreview integer 1" "$pbs_plist"
+      /usr/libexec/PlistBuddy -c "Add :NSServicesStatus:'${key}':presentation_modes:ServicesMenu integer 1" "$pbs_plist"
+      /usr/libexec/PlistBuddy -c "Add :NSServicesStatus:'${key}':presentation_modes:TouchBar integer 0" "$pbs_plist"
+    done
+  fi
+
+  killall cfprefsd 2>/dev/null || true
+}
+
+# =====================================================================
+# 8. ZSHRC MARKER BLOCK
+# =====================================================================
+# Always run — idempotent. Strips any prior block and rewrites. Catches
+# users migrating from the old `i` + `setup-project` aliases that point
+# at dead `~/.if/staging/...` paths.
+
+_write_zshrc() {
+  local zshrc="$HOME/.zshrc"
+  [ -e "$zshrc" ] || touch "$zshrc"
+  if [ -s "$zshrc" ]; then
+    local ts; ts=$(date +%Y%m%d-%H%M)
+    cp "$zshrc" "${zshrc}.${ts}.bak"
+  fi
+  if grep -qF "$MARKER_START" "$zshrc"; then
+    local tmpf; tmpf=$(mktemp)
+    awk -v s="$MARKER_START" -v e="$MARKER_END" '
+      $0 == s { skip=1; next }
+      $0 == e { skip=0; next }
+      !skip  { print }
+    ' "$zshrc" > "$tmpf"
+    mv "$tmpf" "$zshrc"
+  fi
+  local jh_value
+  if [ "$OS" = "darwin" ]; then
+    jh_value="\$HOME/.if/java/Contents/Home"
+  else
+    jh_value="\$HOME/.if/java"
+  fi
+  {
+    [ -s "$zshrc" ] && printf '\n'
+    printf '%s\n' "$MARKER_START"
+    printf 'export PATH="$HOME/.if/node/bin:$PATH"\n'
+    printf 'export PATH="$HOME/.if/claude/bin:$PATH"\n'
+    printf 'export PATH="$HOME/.if/gh/bin:$PATH"\n'
+    printf '[ -x "$HOME/.if/git/bin/git" ] && export PATH="$HOME/.if/git/bin:$PATH"\n'
+    printf '[ -d "$HOME/.if/git/libexec/git-core" ] && export GIT_EXEC_PATH="$HOME/.if/git/libexec/git-core"\n'
+    printf '[ -d "$HOME/.if/git/lib" ] && export DYLD_FALLBACK_LIBRARY_PATH="$HOME/.if/git/lib:$HOME/lib:/usr/local/lib:/usr/lib"\n'
+    printf 'export JAVA_HOME="%s"\n' "$jh_value"
+    printf 'export PATH="$JAVA_HOME/bin:$PATH"\n'
+    printf 'export NPM_CONFIG_CACHE="$HOME/.if/npm-cache"\n'
+    printf 'export CLAUDE_CONFIG_DIR="$HOME/.if/claude-config"\n'
+    # Where new projects created by `n` go. Override per machine
+    # (e.g. ~/_code) by editing the line in ~/.zshrc after install.
+    printf 'export PROJECT_DIR="$HOME/Projects"\n'
+    printf "alias cc='claude --dangerously-skip-permissions'\n"
+    printf "alias ccc='claude --dangerously-skip-permissions --continue'\n"
+    printf "alias ccr='claude --dangerously-skip-permissions --resume'\n"
+    printf "alias n='curl -fsSL https://almostawake.com/n | bash'\n"
+    printf '%s\n' "$MARKER_END"
+  } >> "$zshrc"
+}
+
+# =====================================================================
+# 9. ROW UI + INSTALL/CONFIGURE ORCHESTRATOR
+# =====================================================================
+
+# draw_row "$i" "$state" — installed | installing | pending
+draw_row() {
+  local i="$1" state="$2"
+  local icon color
+  case "$state" in
+    installed)  icon="${C_GRN}✓${C_RST}";  color="$C_GRN"  ;;
+    installing) icon="${C_GRAY}⋯${C_RST}"; color="$C_GRAY" ;;
+    pending)    icon="${C_GRAY}○${C_RST}"; color="$C_GRAY" ;;
+  esac
+  printf '  %b  %b%s%b\n' "$icon" "$color" "${ITEMS[$i]}" "$C_RST"
+}
+
+# update_row "$i" "$state" — move cursor up to row i, redraw, move back.
+# Assumes cursor is "line after the last row" before each call.
+update_row() {
+  local i="$1" state="$2"
+  local up=$((N - i))
+  printf '\033[%dA\r\033[K' "$up"
+  draw_row "$i" "$state"
+  local down=$((N - i - 1))
+  # Use `if ... fi` rather than `[ ... ] && ...` — under set -e the
+  # latter's compound exit is non-zero when the test fails, propagating.
+  if [ "$down" -gt 0 ]; then
+    printf '\033[%dB\r' "$down"
+  fi
+}
+
+run_install() {
+  local i="$1" fn="$2"
+  update_row "$i" "installing"
+  log "run_install: about to exec '$fn'"
+  local rc=0
+  "$fn" >> "$INSTALL_LOG" 2>&1 || rc=$?
+  log "run_install: '$fn' returned rc=$rc"
+  if [ "$rc" -eq 0 ]; then
+    update_row "$i" "installed"
+  else
+    update_row "$i" "pending"
+    echo ""
+    echo "install of ${ITEMS[$i]} failed (rc=$rc) — see $INSTALL_LOG" >&2
+    exit 1
+  fi
+}
+
+if [ "$N_TODO" -gt 0 ]; then
+  echo ""
+  echo ""
+  heading "First: installing the core tooling"
+  echo ""
+  echo "Techy bits you'll get to know later. We use them for installing stuff for you today."
+  echo ""
+
+  for i in $(seq 0 $((N - 1))); do
+    if [ "${INSTALLED[$i]}" = "true" ]; then
+      draw_row "$i" "installed"
+    else
+      draw_row "$i" "pending"
+    fi
+  done
+
+  for i in "${!ITEMS[@]}"; do
+    [ "${INSTALLED[$i]}" = "true" ] && continue
+    run_install "$i" "${INSTALL_FNS[$i]}"
+  done
+
+  # Make just-installed binaries usable for the rest of this run.
+  export PATH="$IF_HOME/gh/bin:$IF_HOME/git/bin:$IF_HOME/node/bin:$IF_HOME/claude/bin:$PATH"
+  [ -d "$IF_HOME/git/lib" ] && export DYLD_FALLBACK_LIBRARY_PATH="$IF_HOME/git/lib"
+  [ -d "$IF_HOME/java/Contents/Home" ] && export JAVA_HOME="$IF_HOME/java/Contents/Home" && export PATH="$JAVA_HOME/bin:$PATH"
+  [ -d "$IF_HOME/java/bin" ] && export JAVA_HOME="$IF_HOME/java" && export PATH="$JAVA_HOME/bin:$PATH"
+
+  # Silent end-steps (no row, just do the work).
+  _configure_terminal  >> "$INSTALL_LOG" 2>&1 || true
+  _configure_workspace >> "$INSTALL_LOG" 2>&1 || true
+fi
+
+# Always rewrite the marker block — cheap, idempotent, catches users
+# migrating from old `i` / `setup-project` aliases that now point at
+# dead paths.
+_write_zshrc >> "$INSTALL_LOG" 2>&1 || true
+
+# Chrome-default-browser is a first-run-only step (only ask once).
+if [ "$have_chrome" = "false" ] && [ "$OS" = "darwin" ]; then
+  echo ""
+  echo ""
+  heading "instructions for the next step: making chrome the default browser"
+  echo ""
+  echo "Next we'll launch chrome. when that happens, it's important to set chrome"
+  echo "as the default browser. You can ignore/dismiss alerts and press \"Don't"
+  echo "sign in\" for now."
+  echo ""
+  echo "Once that's done, QUIT CHROME and come back here :)"
+  echo ""
+  printf "${C_GRAY}press enter when you're ready${C_RST}\n"
+  read -r _ </dev/tty 2>/dev/null || true
+
+  if [ -d "$HOME/Applications/Chrome with Claude Code.app" ]; then
+    open "$HOME/Applications/Chrome with Claude Code.app" 2>/dev/null || true
+    for _ in $(seq 1 20); do
+      pgrep -U "$(id -u)" -f "$HOME/Applications/Google Chrome" >/dev/null 2>&1 && break
+      sleep 0.5
+    done
+    while pgrep -U "$(id -u)" -f "$HOME/Applications/Google Chrome" >/dev/null 2>&1; do
+      sleep 1
+    done
+  fi
+fi
+
+if [ "$N_TODO" -gt 0 ]; then
+  echo ""
+  heading "one-time setup done"
+  echo ""
+  printf "Your machine is ready for building.  sweeet. \n"
+fi
+
+# =====================================================================
+# 10. SIGN IN (via template stage + cmd-auth.mjs)
+# =====================================================================
+# Stage the public template into ~/.if/template-stage so we can use
+# its cmd-auth.mjs for the OAuth flow. Cred lands at
+# ~/.if/template-stage/.env.auth.json — we copy it into the final
+# project dir later (cp not mv, so future `n` runs reuse the cached
+# token and skip browser consent).
+
+echo ""
+echo ""
+heading "let's set up a new project"
+echo ""
+echo "Next you'll give access to a dedicated gmail account so claude"
+echo "can administer things in that account on your behalf. Sign in"
+echo "with that account in the browser when prompted."
+echo ""
+printf "${C_GRAY}press enter to continue${C_RST}\n"
+read -r _ </dev/tty 2>/dev/null || true
+echo ""
+
+stage_template() {
+  if [ -d "$TEMPLATE_STAGE/.git" ]; then
+    log "stage_template: pulling existing stage"
+    ( cd "$TEMPLATE_STAGE" && git pull --ff-only --quiet ) >> "$INSTALL_LOG" 2>&1 \
+      || log "stage_template: pull failed (non-fatal)"
+  else
+    log "stage_template: fresh clone"
+    rm -rf "$TEMPLATE_STAGE"
+    git clone --depth 1 --quiet "$TEMPLATE_REPO" "$TEMPLATE_STAGE" >> "$INSTALL_LOG" 2>&1 \
+      || die "couldn't clone template repo"
+  fi
+}
+stage_template
+
+# cmd-auth.mjs is interactive (opens browser, listens on a loopback
+# port for the callback). On success it writes .env.auth.json next to
+# itself and prints "✓  signed in as <email>" to stderr.
+( cd "$TEMPLATE_STAGE" && node cmd-auth.mjs </dev/tty ) || die "sign-in didn't complete"
+[ -f "$TEMPLATE_STAGE/.env.auth.json" ] || die "sign-in produced no cred file"
+
+EMAIL=$(perl -MJSON::PP -e 'print decode_json(do { local $/; <STDIN> })->{email} // ""' < "$TEMPLATE_STAGE/.env.auth.json")
+ACCESS_TOKEN=$(perl -MJSON::PP -e 'print decode_json(do { local $/; <STDIN> })->{tokens}{access_token} // ""' < "$TEMPLATE_STAGE/.env.auth.json")
+[ -n "$EMAIL" ]        || die "couldn't read email from $TEMPLATE_STAGE/.env.auth.json"
+[ -n "$ACCESS_TOKEN" ] || die "couldn't read access_token from $TEMPLATE_STAGE/.env.auth.json"
+
+log "n: signed in as $EMAIL"
+
+# =====================================================================
+# 11. GCP/FIREBASE REST PLUMBING
+# =====================================================================
+
+json_extract() {
+  grep -oE "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]+\"" | head -1 \
+    | sed -E "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"([^\"]+)\".*/\1/"
+}
+
+op_name_from() {
+  printf '%s' "$1" | grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]+' \
+    | head -1 | sed 's/.*"\([^"]*\)$/\1/'
+}
+
+# Populate global EXISTING_PIDS with active projects accessible to the
+# authenticated account. Personal accounts are well under the page
+# limit, so a single page is fine.
+EXISTING_PIDS=()
+list_projects() {
+  EXISTING_PIDS=()
+  local resp
+  if ! resp=$(curl -fsSL \
+      -H "Authorization: Bearer $ACCESS_TOKEN" \
+      "https://cloudresourcemanager.googleapis.com/v3/projects:search?query=state:ACTIVE&pageSize=50" 2>&1); then
+    http_log "list_projects: failed: $resp"
+    return 1
+  fi
+  local pids
+  pids=$(printf '%s' "$resp" | perl -MJSON::PP -e '
+    my $j = decode_json(do { local $/; <STDIN> });
+    for my $p (@{$j->{projects} // []}) {
+      print $p->{projectId}, "\n";
+    }
+  ') || { http_log "list_projects: parse failed"; return 1; }
+  while IFS= read -r line; do
+    [ -n "$line" ] && EXISTING_PIDS+=("$line")
+  done <<< "$pids"
+  http_log "list_projects: ${#EXISTING_PIDS[@]} active project(s) found"
+  return 0
+}
+
+# Cheap pre-flight: do they have an OPEN billing account (free-trial or paid)?
+# Sets PREFLIGHT_REASON on failure ("no_billing" | "billing_check_failed").
+# Firebase ToS is detected later in add_firebase — there's no clean
+# read-only probe for it.
+PREFLIGHT_REASON=""
+preflight_check() {
+  PREFLIGHT_REASON=""
+  local resp
+  if ! resp=$(curl -fsSL -H "Authorization: Bearer $ACCESS_TOKEN" \
+      "https://cloudbilling.googleapis.com/v1/billingAccounts" 2>&1); then
+    PREFLIGHT_REASON="billing_check_failed"
+    http_log "preflight: billing list failed: $resp"
+    return 1
+  fi
+  if ! printf '%s' "$resp" | grep -q '"open"[[:space:]]*:[[:space:]]*true'; then
+    PREFLIGHT_REASON="no_billing"
+    http_log "preflight: no open billing account"
+    return 1
+  fi
+  return 0
+}
+
+# Wait for a Google long-running operation. $1 = full op URL, $2 = timeout sec.
+# Caller can set X_GOOG_USER_PROJECT to add the X-Goog-User-Project header
+# (required for Firebase/Identity APIs once enabled on the project).
+wait_for_op() {
+  local url="$1" timeout="${2:-60}"
+  local i resp code hdr=()
+  if [ -n "${X_GOOG_USER_PROJECT:-}" ]; then
+    hdr=(-H "X-Goog-User-Project: $X_GOOG_USER_PROJECT")
+  fi
+  http_log "wait_for_op start: $url (timeout=${timeout}s, X-Goog-User-Project=${X_GOOG_USER_PROJECT:-<none>})"
+  for i in $(seq 1 "$timeout"); do
+    local tmp; tmp=$(mktemp)
+    code=$(curl -s -o "$tmp" -w "%{http_code}" \
+      -H "Authorization: Bearer $ACCESS_TOKEN" "${hdr[@]}" "$url")
+    resp=$(cat "$tmp"); rm -f "$tmp"
+    http_log "  poll #$i HTTP $code: $(log_trunc "$resp")"
+    if [ "$code" != "200" ]; then
+      http_log "wait_for_op aborting: non-200 status from poll"
+      return 1
+    fi
+    if printf '%s' "$resp" | grep -q '"done"[[:space:]]*:[[:space:]]*true'; then
+      if printf '%s' "$resp" | grep -q '"error"'; then
+        http_log "wait_for_op error from $url"
+        return 1
+      fi
+      http_log "wait_for_op done after $i polls"
+      return 0
+    fi
+    sleep 1
+  done
+  http_log "wait_for_op timeout after ${timeout}s: $url last_resp: $(log_trunc "$resp")"
+  return 1
+}
+
+# Create a GCP project and wait for the LRO. Prints one of:
+#   ok | taken | timeout | err<code>
+create_project() {
+  local pid="$1"
+  local tmp; tmp=$(mktemp)
+  local code
+  code=$(curl -s -o "$tmp" -w "%{http_code}" \
+    -X POST \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"projectId\":\"$pid\",\"displayName\":\"$pid\"}" \
+    "https://cloudresourcemanager.googleapis.com/v3/projects")
+  local body; body=$(cat "$tmp"); rm -f "$tmp"
+  http_log "create_project $pid → HTTP $code"
+
+  if [ "$code" = "409" ] || printf '%s' "$body" | grep -qi 'already.*exists\|ALREADY_EXISTS'; then
+    printf '%s' "taken"; return
+  fi
+  if [ "$code" != "200" ] && [ "$code" != "201" ]; then
+    printf 'err%s' "$code"; return
+  fi
+
+  local op_name; op_name=$(op_name_from "$body")
+  [ -z "$op_name" ] && { printf '%s' "err-noop"; return; }
+
+  local i resp
+  for i in $(seq 1 60); do
+    sleep 1
+    resp=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
+      "https://cloudresourcemanager.googleapis.com/v3/$op_name")
+    if printf '%s' "$resp" | grep -q '"done"[[:space:]]*:[[:space:]]*true'; then
+      if printf '%s' "$resp" | grep -q '"error"'; then
+        if printf '%s' "$resp" | grep -qi 'already.*exists\|ALREADY_EXISTS'; then
+          printf '%s' "taken"; return
+        fi
+        printf '%s' "err-op-failed"; return
+      fi
+      printf '%s' "ok"; return
+    fi
+  done
+  printf '%s' "timeout"
+}
+
+# Enable a single API. first=1 skips X-Goog-User-Project (chicken-and-egg
+# on a fresh project that has no APIs to bill quota to yet).
+enable_api() {
+  local pid="$1" api="$2" first="${3:-0}"
+  local hdr=(-H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json")
+  [ "$first" != "1" ] && hdr+=(-H "X-Goog-User-Project: $pid")
+
+  http_log "enable_api start: pid=$pid api=$api first=$first"
+  local tmp; tmp=$(mktemp)
+  local code
+  code=$(curl -s -o "$tmp" -w "%{http_code}" -X POST "${hdr[@]}" \
+    "https://serviceusage.googleapis.com/v1/projects/$pid/services/$api:enable")
+  local body; body=$(cat "$tmp"); rm -f "$tmp"
+  http_log "enable_api $api → HTTP $code body: $(log_trunc "$body")"
+
+  if [ "$code" != "200" ]; then return 1; fi
+  # Already-enabled services return operations/noop.DONE_OPERATION with
+  # done:true right in the response — that's NOT a real op, polling
+  # 400s with "Invalid operation id". Treat done:true as success.
+  if printf '%s' "$body" | grep -q '"done"[[:space:]]*:[[:space:]]*true'; then
+    http_log "enable_api $api: completed synchronously (already enabled)"
+    return 0
+  fi
+  local op_name; op_name=$(op_name_from "$body")
+  http_log "enable_api $api op_name='$op_name'"
+  if [ -n "$op_name" ]; then
+    if [ "$first" = "1" ]; then
+      wait_for_op "https://serviceusage.googleapis.com/v1/$op_name" 120
+    else
+      X_GOOG_USER_PROJECT="$pid" wait_for_op "https://serviceusage.googleapis.com/v1/$op_name" 120
+    fi
+  else
+    http_log "enable_api $api: no op_name; treating POST 200 as success"
+  fi
+}
+
+# Link an open billing account to a project. preflight_check has
+# already verified at least one open account exists; this attaches the
+# first one so billing-required APIs (Cloud Build / Run / Artifact
+# Registry / etc) can be enabled. Idempotent.
+link_billing() {
+  local pid="$1"
+  http_log "link_billing start: pid=$pid"
+
+  local cur_resp
+  cur_resp=$(curl -s \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    "https://cloudbilling.googleapis.com/v1/projects/$pid/billingInfo")
+  http_log "link_billing $pid current: $(log_trunc "$cur_resp")"
+  if printf '%s' "$cur_resp" | grep -q '"billingEnabled"[[:space:]]*:[[:space:]]*true'; then
+    http_log "link_billing $pid: already linked, skipping"
+    return 0
+  fi
+
+  local accounts_resp
+  accounts_resp=$(curl -s \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    "https://cloudbilling.googleapis.com/v1/billingAccounts")
+  http_log "link_billing $pid accounts: $(log_trunc "$accounts_resp")"
+  local account_name
+  account_name=$(ACCOUNTS="$accounts_resp" perl -MJSON::PP -e '
+    my $j = decode_json($ENV{ACCOUNTS});
+    for my $a (@{$j->{billingAccounts} // []}) {
+      if ($a->{open}) { print $a->{name}; last; }
+    }
+  ')
+  if [ -z "$account_name" ]; then
+    http_log "link_billing $pid: no open billing account found"
+    return 1
+  fi
+  http_log "link_billing $pid: linking $account_name"
+
+  local tmp; tmp=$(mktemp)
+  local code
+  code=$(curl -s -o "$tmp" -w "%{http_code}" -X PUT \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"billingAccountName\":\"$account_name\"}" \
+    "https://cloudbilling.googleapis.com/v1/projects/$pid/billingInfo")
+  local body; body=$(cat "$tmp"); rm -f "$tmp"
+  http_log "link_billing $pid PUT → HTTP $code body: $(log_trunc "$body")"
+  if [ "$code" != "200" ]; then return 1; fi
+}
+
+# Convert a GCP project to a Firebase project. Sets PREFLIGHT_REASON to
+# "no_firebase_tos" if the call fails because the user hasn't accepted
+# the Firebase ToS yet.
+add_firebase() {
+  local pid="$1"
+
+  http_log "add_firebase start: pid=$pid"
+  local check_tmp; check_tmp=$(mktemp)
+  local check_code
+  check_code=$(curl -s -o "$check_tmp" -w "%{http_code}" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "X-Goog-User-Project: $pid" \
+    "https://firebase.googleapis.com/v1beta1/projects/$pid")
+  local check_body; check_body=$(cat "$check_tmp"); rm -f "$check_tmp"
+  http_log "add_firebase $pid skip-check → HTTP $check_code body: $(log_trunc "$check_body")"
+  if [ "$check_code" = "200" ]; then
+    http_log "add_firebase $pid: already Firebase, skipping"
+    return 0
+  fi
+
+  local tmp; tmp=$(mktemp)
+  local code
+  code=$(curl -s -o "$tmp" -w "%{http_code}" -X POST \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "X-Goog-User-Project: $pid" \
+    -H "Content-Type: application/json" \
+    -d '{}' \
+    "https://firebase.googleapis.com/v1beta1/projects/$pid:addFirebase")
+  local body; body=$(cat "$tmp"); rm -f "$tmp"
+  http_log "add_firebase $pid → HTTP $code body: $(log_trunc "$body")"
+
+  if [ "$code" = "400" ] && printf '%s' "$body" | grep -qi 'terms.of.service\|console\.developers\.google\.com/terms'; then
+    PREFLIGHT_REASON="no_firebase_tos"
+    return 1
+  fi
+  if [ "$code" != "200" ]; then return 1; fi
+  local op_name; op_name=$(op_name_from "$body")
+  http_log "add_firebase $pid op_name='$op_name'"
+  [ -z "$op_name" ] && return 1
+  X_GOOG_USER_PROJECT="$pid" wait_for_op "https://firebase.googleapis.com/v1beta1/$op_name" 120
+}
+
+# Create a Firebase web app config so the SvelteKit client can call
+# initializeApp({...}). The webApp's apiKey/appId are fetched later
+# (during clone+deploy) via webApps.list + webApps.getConfig.
+create_web_app() {
+  local pid="$1"
+
+  http_log "create_web_app start: pid=$pid"
+  local list_resp
+  list_resp=$(curl -s \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "X-Goog-User-Project: $pid" \
+    "https://firebase.googleapis.com/v1beta1/projects/$pid/webApps")
+  http_log "create_web_app $pid skip-check list: $(log_trunc "$list_resp")"
+  if printf '%s' "$list_resp" | grep -q '"appId"'; then
+    http_log "create_web_app $pid: web app exists, skipping"
+    return 0
+  fi
+
+  local tmp; tmp=$(mktemp)
+  local code
+  code=$(curl -s -o "$tmp" -w "%{http_code}" -X POST \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "X-Goog-User-Project: $pid" \
+    -H "Content-Type: application/json" \
+    -d '{"displayName":"web"}' \
+    "https://firebase.googleapis.com/v1beta1/projects/$pid/webApps")
+  local body; body=$(cat "$tmp"); rm -f "$tmp"
+  http_log "create_web_app $pid → HTTP $code body: $(log_trunc "$body")"
+  if [ "$code" != "200" ]; then return 1; fi
+  local op_name; op_name=$(op_name_from "$body")
+  http_log "create_web_app $pid op_name='$op_name'"
+  [ -z "$op_name" ] && return 1
+  X_GOOG_USER_PROJECT="$pid" wait_for_op "https://firebase.googleapis.com/v1beta1/$op_name" 120
+}
+
+# Create the (default) Firestore database in australia-southeast1, NATIVE mode.
+create_firestore() {
+  local pid="$1"
+
+  http_log "create_firestore start: pid=$pid"
+  local check_tmp; check_tmp=$(mktemp)
+  local check_code
+  check_code=$(curl -s -o "$check_tmp" -w "%{http_code}" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "X-Goog-User-Project: $pid" \
+    "https://firestore.googleapis.com/v1/projects/$pid/databases/(default)")
+  local check_body; check_body=$(cat "$check_tmp"); rm -f "$check_tmp"
+  http_log "create_firestore $pid skip-check → HTTP $check_code body: $(log_trunc "$check_body")"
+  if [ "$check_code" = "200" ]; then
+    http_log "create_firestore $pid: (default) exists, skipping"
+    return 0
+  fi
+
+  local tmp; tmp=$(mktemp)
+  local code
+  code=$(curl -s -o "$tmp" -w "%{http_code}" -X POST \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "X-Goog-User-Project: $pid" \
+    -H "Content-Type: application/json" \
+    -d '{"locationId":"australia-southeast1","type":"FIRESTORE_NATIVE"}' \
+    "https://firestore.googleapis.com/v1/projects/$pid/databases?databaseId=(default)")
+  local body; body=$(cat "$tmp"); rm -f "$tmp"
+  http_log "create_firestore $pid → HTTP $code body: $(log_trunc "$body")"
+  if [ "$code" != "200" ]; then return 1; fi
+  local op_name; op_name=$(op_name_from "$body")
+  http_log "create_firestore $pid op_name='$op_name'"
+  [ -z "$op_name" ] && return 1
+  X_GOOG_USER_PROJECT="$pid" wait_for_op "https://firestore.googleapis.com/v1/$op_name" 180
+}
+
+# Create the default Firebase Storage bucket in australia-southeast1.
+create_storage_bucket() {
+  local pid="$1"
+
+  http_log "create_storage_bucket start: pid=$pid"
+  local list_resp
+  list_resp=$(curl -s \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "X-Goog-User-Project: $pid" \
+    "https://firebasestorage.googleapis.com/v1beta/projects/$pid/buckets")
+  http_log "create_storage_bucket $pid skip-check list: $(log_trunc "$list_resp")"
+  if printf '%s' "$list_resp" | grep -q '"bucket"'; then
+    http_log "create_storage_bucket $pid: bucket exists, skipping"
+    return 0
+  fi
+
+  local tmp; tmp=$(mktemp)
+  local code
+  code=$(curl -s -o "$tmp" -w "%{http_code}" -X POST \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "X-Goog-User-Project: $pid" \
+    -H "Content-Type: application/json" \
+    -d '{"location":"australia-southeast1"}' \
+    "https://firebasestorage.googleapis.com/v1beta/projects/$pid/defaultBucket")
+  local body; body=$(cat "$tmp"); rm -f "$tmp"
+  http_log "create_storage_bucket $pid → HTTP $code body: $(log_trunc "$body")"
+  if [ "$code" != "200" ]; then return 1; fi
+  local op_name; op_name=$(op_name_from "$body")
+  http_log "create_storage_bucket $pid op_name='$op_name'"
+  if [ -n "$op_name" ] && [[ "$op_name" == *operations/* ]]; then
+    X_GOOG_USER_PROJECT="$pid" wait_for_op "https://firebasestorage.googleapis.com/v1beta/$op_name" 120
+  fi
+}
+
+# Configure Firebase Auth providers via Identity Toolkit. Enables
+# anonymous + email-link sign-in and appends "localhost" to
+# authorizedDomains so email links work in local dev (projects created
+# after 2025-04-28 don't include localhost by default).
+configure_auth() {
+  local pid="$1"
+  http_log "configure_auth start: pid=$pid"
+
+  # The Identity Toolkit Config resource doesn't exist until first
+  # PATCH — GET can return 404 even on a project where the API is
+  # enabled. Inspect the code rather than -fsSL'ing out on 404.
+  local cur_tmp; cur_tmp=$(mktemp)
+  local cur cur_code
+  cur_code=$(curl -s -o "$cur_tmp" -w "%{http_code}" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "X-Goog-User-Project: $pid" \
+    "https://identitytoolkit.googleapis.com/admin/v2/projects/$pid/config")
+  cur=$(cat "$cur_tmp"); rm -f "$cur_tmp"
+  http_log "configure_auth $pid GET → HTTP $cur_code body: $(log_trunc "$cur")"
+
+  # On 404 (fresh project), initializeAuth bootstraps onto Identity
+  # Platform (free tier: 50K MAU/month). Anonymous + email-link sign-in
+  # both work the same as on plain Firebase Auth. PATCH alone won't —
+  # returns CONFIGURATION_NOT_FOUND.
+  if [ "$cur_code" = "404" ]; then
+    http_log "configure_auth $pid: initializing Identity Platform"
+    local init_tmp; init_tmp=$(mktemp)
+    local init_code init_body
+    init_code=$(curl -s -o "$init_tmp" -w "%{http_code}" -X POST \
+      -H "Authorization: Bearer $ACCESS_TOKEN" \
+      -H "X-Goog-User-Project: $pid" \
+      -H "Content-Type: application/json" \
+      -d '{}' \
+      "https://identitytoolkit.googleapis.com/v2/projects/$pid/identityPlatform:initializeAuth")
+    init_body=$(cat "$init_tmp"); rm -f "$init_tmp"
+    http_log "configure_auth $pid initializeAuth → HTTP $init_code body: $(log_trunc "$init_body")"
+    if [ "$init_code" != "200" ]; then return 1; fi
+
+    cur_tmp=$(mktemp)
+    cur_code=$(curl -s -o "$cur_tmp" -w "%{http_code}" \
+      -H "Authorization: Bearer $ACCESS_TOKEN" \
+      -H "X-Goog-User-Project: $pid" \
+      "https://identitytoolkit.googleapis.com/admin/v2/projects/$pid/config")
+    cur=$(cat "$cur_tmp"); rm -f "$cur_tmp"
+    http_log "configure_auth $pid GET (post-init) → HTTP $cur_code body: $(log_trunc "$cur")"
+    if [ "$cur_code" != "200" ]; then return 1; fi
+  elif [ "$cur_code" != "200" ]; then
+    http_log "configure_auth: unexpected GET status $cur_code"
+    return 1
+  fi
+
+  local domains_json
+  domains_json=$(CUR="$cur" perl -MJSON::PP -e '
+    my $j = decode_json($ENV{CUR});
+    my @d = @{$j->{authorizedDomains} // []};
+    push @d, "localhost" unless grep { $_ eq "localhost" } @d;
+    print encode_json(\@d);
+  ') || { http_log "configure_auth: domain merge failed"; return 1; }
+
+  local body
+  body=$(printf '{"signIn":{"anonymous":{"enabled":true},"email":{"enabled":true,"passwordRequired":false}},"authorizedDomains":%s}' "$domains_json")
+
+  local tmp; tmp=$(mktemp)
+  local code
+  code=$(curl -s -o "$tmp" -w "%{http_code}" -X PATCH \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "X-Goog-User-Project: $pid" \
+    -H "Content-Type: application/json" \
+    -d "$body" \
+    "https://identitytoolkit.googleapis.com/admin/v2/projects/$pid/config?updateMask=signIn.anonymous,signIn.email,authorizedDomains")
+  local resp; resp=$(cat "$tmp"); rm -f "$tmp"
+  http_log "configure_auth $pid → HTTP $code body: $(log_trunc "$resp")"
+  if [ "$code" != "200" ]; then return 1; fi
+}
+
+# Validate a GCP project ID. Collects ALL violated rules so the user
+# sees every rule they're breaking at once, not just the first.
+VALIDATION_ERRORS=()
+validate_gcp_project_id() {
+  local id="$1"
+  VALIDATION_ERRORS=()
+  if [ -z "$id" ]; then
+    VALIDATION_ERRORS+=("cannot be empty")
+    return 1
+  fi
+  if [ "${#id}" -lt 6 ];            then VALIDATION_ERRORS+=("6 char min"); fi
+  if [ "${#id}" -gt 30 ];           then VALIDATION_ERRORS+=("30 char max"); fi
+  if [[ ! "$id" =~ ^[a-z] ]];       then VALIDATION_ERRORS+=("must start with a letter"); fi
+  if [[ "$id" =~ -- ]];             then VALIDATION_ERRORS+=("no double dashes"); fi
+  if [[ "$id" =~ -$ ]];             then VALIDATION_ERRORS+=("cannot end with a dash"); fi
+  if [[ ! "$id" =~ ^[a-z0-9-]+$ ]]; then VALIDATION_ERRORS+=("lowercase letters, digits, dashes only"); fi
+  if [ ${#VALIDATION_ERRORS[@]} -gt 0 ]; then return 1; fi
+  return 0
+}
+
+# Print setup-needed instructions when preflight (no_billing) or
+# add_firebase (no_firebase_tos) detects an account that hasn't
+# completed its one-time Firebase Console setup.
+print_setup_needed() {
+  local email="$1" reason="$2"
+  echo ""
+  case "$reason" in
+    no_firebase_tos)
+      echo "✗ Firebase Terms of Service not accepted yet for $email."
+      echo ""
+      echo "  Fastest fix: open Firebase Console and start their"
+      echo "  'create a project' flow once. It bundles ToS acceptance."
+      echo ""
+      echo "  https://console.firebase.google.com/"
+      ;;
+    no_billing)
+      echo "✗ No billing account set up yet for $email."
+      echo ""
+      echo "  Fastest fix: open Firebase Console, click Create a project,"
+      echo "  accept the free trial when prompted."
+      echo ""
+      echo "  https://console.firebase.google.com/"
+      ;;
+    *)
+      echo "✗ Setup issue for $email: $reason"
+      ;;
+  esac
+  echo ""
+  echo "Then re-run this script."
+  echo ""
+}
+
+# Preflight (open billing account) gates further provisioning. Firebase
+# ToS gets caught later in add_firebase via PREFLIGHT_REASON=no_firebase_tos.
+if ! preflight_check; then
+  print_setup_needed "$EMAIL" "$PREFLIGHT_REASON"
+  exit 1
+fi
+
+# =====================================================================
+# 12. PROJECT CHOOSER + PROVISIONING ROWS
+# =====================================================================
+
+# Provisioning items, paired in lockstep. Three label arrays mirror
+# state-appropriate phrasing:
+#   pending  "enable firebase api"        (infinitive — "to do")
+#   running  "enabling firebase api"      (gerund — "doing")
+#   done     "firebase api enabled"       (past — "done")
+PROV_PENDING=(
+  "enable firebase api"
+  "add firebase to project"
+  "link billing account"
+  "enable eventarc api"
+  "enable firestore api"
+  "enable cloud storage api"
+  "enable firebase storage api"
+  "enable identity toolkit api"
+  "enable firebase hosting api"
+  "enable cloud functions api"
+  "enable cloud build api"
+  "enable cloud run api"
+  "enable artifact registry api"
+  "enable cloud pub/sub api"
+  "enable cloud scheduler api"
+  "enable gemini api"
+  "enable api keys api"
+  "create web app config"
+  "create firestore (sydney)"
+  "create storage bucket (sydney)"
+  "configure auth providers"
+)
+PROV_RUNNING=(
+  "enabling firebase api"
+  "adding firebase to project"
+  "linking billing account"
+  "enabling eventarc api"
+  "enabling firestore api"
+  "enabling cloud storage api"
+  "enabling firebase storage api"
+  "enabling identity toolkit api"
+  "enabling firebase hosting api"
+  "enabling cloud functions api"
+  "enabling cloud build api"
+  "enabling cloud run api"
+  "enabling artifact registry api"
+  "enabling cloud pub/sub api"
+  "enabling cloud scheduler api"
+  "enabling gemini api"
+  "enabling api keys api"
+  "creating web app config"
+  "creating firestore (sydney)"
+  "creating storage bucket (sydney)"
+  "configuring auth providers"
+)
+PROV_DONE=(
+  "firebase api enabled"
+  "firebase added to project"
+  "billing account linked"
+  "eventarc api enabled"
+  "firestore api enabled"
+  "cloud storage api enabled"
+  "firebase storage api enabled"
+  "identity toolkit api enabled"
+  "firebase hosting api enabled"
+  "cloud functions api enabled"
+  "cloud build api enabled"
+  "cloud run api enabled"
+  "artifact registry api enabled"
+  "cloud pub/sub api enabled"
+  "cloud scheduler api enabled"
+  "gemini api enabled"
+  "api keys api enabled"
+  "web app config created"
+  "firestore (sydney) created"
+  "storage bucket (sydney) created"
+  "auth providers configured"
+)
+PROV_FNS=(
+  "_prov_enable_firebase"
+  "_prov_add_firebase"
+  "_prov_link_billing"
+  "_prov_enable_eventarc"
+  "_prov_enable_firestore"
+  "_prov_enable_storage"
+  "_prov_enable_firebasestorage"
+  "_prov_enable_identitytoolkit"
+  "_prov_enable_firebasehosting"
+  "_prov_enable_cloudfunctions"
+  "_prov_enable_cloudbuild"
+  "_prov_enable_run"
+  "_prov_enable_artifactregistry"
+  "_prov_enable_pubsub"
+  "_prov_enable_cloudscheduler"
+  "_prov_enable_gemini"
+  "_prov_enable_apikeys"
+  "_prov_web_app"
+  "_prov_firestore"
+  "_prov_storage"
+  "_prov_auth"
+)
+PROV_N=${#PROV_PENDING[@]}
+
+# Wrappers — global $PID is set by the chooser before provisioning.
+_prov_enable_firebase()         { enable_api "$PID" firebase.googleapis.com 1; }
+_prov_add_firebase()            { add_firebase "$PID"; }
+_prov_link_billing()            { link_billing "$PID"; }
+_prov_enable_firestore()        { enable_api "$PID" firestore.googleapis.com; }
+_prov_enable_storage()          { enable_api "$PID" storage.googleapis.com; }
+_prov_enable_firebasestorage()  { enable_api "$PID" firebasestorage.googleapis.com; }
+_prov_enable_identitytoolkit()  { enable_api "$PID" identitytoolkit.googleapis.com; }
+_prov_enable_firebasehosting()  { enable_api "$PID" firebasehosting.googleapis.com; }
+_prov_enable_cloudfunctions()   { enable_api "$PID" cloudfunctions.googleapis.com; }
+_prov_enable_cloudbuild()       { enable_api "$PID" cloudbuild.googleapis.com; }
+_prov_enable_run()              { enable_api "$PID" run.googleapis.com; }
+_prov_enable_artifactregistry() { enable_api "$PID" artifactregistry.googleapis.com; }
+_prov_enable_eventarc()         { enable_api "$PID" eventarc.googleapis.com; }
+_prov_enable_pubsub()           { enable_api "$PID" pubsub.googleapis.com; }
+_prov_enable_cloudscheduler()   { enable_api "$PID" cloudscheduler.googleapis.com; }
+_prov_enable_gemini()           { enable_api "$PID" generativelanguage.googleapis.com; }
+_prov_enable_apikeys()          { enable_api "$PID" apikeys.googleapis.com; }
+_prov_web_app()                 { create_web_app "$PID"; }
+_prov_firestore()               { create_firestore "$PID"; }
+_prov_storage()                 { create_storage_bucket "$PID"; }
+_prov_auth()                    { configure_auth "$PID"; }
+
+draw_prov_row() {
+  local i="$1" state="$2"
+  local icon color label
+  case "$state" in
+    done)    icon="${C_GRN}✓${C_RST}";  color="$C_GRN";  label="${PROV_DONE[$i]}"    ;;
+    running) icon="${C_GRAY}⋯${C_RST}"; color="$C_GRAY"; label="${PROV_RUNNING[$i]}" ;;
+    pending) icon="${C_GRAY}○${C_RST}"; color="$C_GRAY"; label="${PROV_PENDING[$i]}" ;;
+    failed)  icon="${C_RED}✗${C_RST}";  color="$C_RED";  label="${PROV_RUNNING[$i]}" ;;
+  esac
+  printf '%b  %b%s%b\n' "$icon" "$color" "$label" "$C_RST"
+}
+
+update_prov_row() {
+  local i="$1" state="$2"
+  local up=$((PROV_N - i))
+  printf '\033[%dA\r\033[K' "$up"
+  draw_prov_row "$i" "$state"
+  local down=$((PROV_N - i - 1))
+  if [ "$down" -gt 0 ]; then
+    printf '\033[%dB\r' "$down"
+  fi
+}
+
+provision_all() {
+  local i fn rc
+  for i in $(seq 0 $((PROV_N - 1))); do
+    draw_prov_row "$i" "pending"
+  done
+  for i in "${!PROV_FNS[@]}"; do
+    fn="${PROV_FNS[$i]}"
+    update_prov_row "$i" "running"
+    rc=0
+    "$fn" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      update_prov_row "$i" "done"
+    else
+      update_prov_row "$i" "failed"
+      echo ""
+      if [ "$fn" = "_prov_add_firebase" ]; then
+        printf "${C_RED}✗  Failed to add firebase to the project. This most likely means\n   you haven't yet accepted the Firebase terms & conditions.${C_RST}\n"
+        echo ""
+        printf "Press any key to open the readme..."
+        read -n 1 -s -r </dev/tty || true
+        printf "\r\033[K"
+        chrome_open "https://github.com/almostawake/if#readme"
+      fi
+      return 1
+    fi
+  done
+  return 0
+}
+
+prompt_create_project() {
+  PID=""
+  local tried_names=() candidate result joined e
+  while [ -z "$PID" ]; do
+    if [ ${#tried_names[@]} -gt 0 ]; then
+      joined=$(printf "%s, " "${tried_names[@]}")
+      joined="${joined%, }"
+      printf "${C_GRAY}already tried: %s${C_RST}\n" "$joined"
+    fi
+    printf "project id: "
+    read -r candidate </dev/tty || candidate=""
+    if ! validate_gcp_project_id "$candidate"; then
+      for e in "${VALIDATION_ERRORS[@]}"; do
+        printf "${C_RED}✗  %s${C_RST}\n" "$e"
+      done
+      echo ""
+      continue
+    fi
+    printf "${C_GRAY}⋯  creating %s${C_RST}" "$candidate"
+    result=$(create_project "$candidate")
+    printf "\r\033[K"
+    case "$result" in
+      ok)
+        printf "${C_GRN}✓  %s created${C_RST}\n" "$candidate"
+        PID="$candidate"
+        ;;
+      taken)
+        printf "${C_RED}✗  %s is taken${C_RST}\n\n" "$candidate"
+        tried_names+=("$candidate")
+        ;;
+      timeout)
+        printf "${C_RED}✗  create timed out for %s${C_RST}\n\n" "$candidate"
+        tried_names+=("$candidate")
+        ;;
+      err*)
+        printf "${C_RED}✗  error creating %s (HTTP %s)${C_RST}\n\n" "$candidate" "${result#err}"
+        tried_names+=("$candidate")
+        ;;
+      *)
+        printf "${C_RED}✗  unexpected result (%s) for %s${C_RST}\n\n" "$result" "$candidate"
+        tried_names+=("$candidate")
+        ;;
+    esac
+  done
+}
+
+# Pull existing projects so we can offer reuse alongside "create new".
+# Encouraged because (a) every Firebase-ToS-accepting user already has a
+# leftover "nothing-XXXXX" shell and (b) tests of provisioning logic
+# shouldn't need a fresh project each time.
+list_projects || true
+
+PID=""
+if [ ${#EXISTING_PIDS[@]} -eq 0 ]; then
+  prompt_create_project
+else
+  while [ -z "$PID" ]; do
+    echo "Pick a project to provision:"
+    echo ""
+    n=1
+    for p in "${EXISTING_PIDS[@]}"; do
+      printf "%d. %s\n" "$n" "$p"
+      n=$((n + 1))
+    done
+    printf "%d. + create a new project\n" "$n"
+    echo ""
+    printf "> "
+    read -r choice </dev/tty || choice=""
+
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "$n" ]; then
+      printf "${C_RED}✗  pick a number 1-%d${C_RST}\n\n" "$n"
+      continue
+    fi
+
+    if [ "$choice" -eq "$n" ]; then
+      echo ""
+      prompt_create_project
+    else
+      PID="${EXISTING_PIDS[$((choice - 1))]}"
+      echo ""
+      printf "${C_GRN}✓  using %s${C_RST}\n" "$PID"
+    fi
+  done
+fi
+
+echo ""
+if ! provision_all; then
+  exit 1
+fi
+
+# =====================================================================
+# 13. CLONE TEMPLATE + ENV + SEED + DEPLOY
+# =====================================================================
+# Clone fresh into ${PROJECT_DIR}/<pid> (PROJECT_DIR comes from ~/.zshrc,
+# default ~/Projects), copy in the staged .env.auth.json, write .env
+# (PROJECT_ID + ACCOUNT_EMAIL), write client/.env (Firebase Web config),
+# seed the project owner's email into Firestore allowedEmails, npm
+# install, deploy.
+
+PROJECT_PARENT="${PROJECT_DIR:-$HOME/Projects}"
+PROJECT_PATH="$PROJECT_PARENT/$PID"
+mkdir -p "$PROJECT_PARENT"
+
+# Labelled step runner: prints "⋯ label" while $2... runs (output to
+# $HTTP_LOG), replaces with "✓ label" on success or "✗ label" + log
+# tail + exit on failure.
+_deploy_step() {
+  local label="$1"; shift
+  printf "${C_GRAY}⋯  %s${C_RST}" "$label"
+  if "$@" >> "$HTTP_LOG" 2>&1; then
+    printf "\r\033[K${C_GRN}✓  %s${C_RST}\n" "$label"
+  else
+    printf "\r\033[K${C_RED}✗  %s${C_RST}\n" "$label"
+    echo ""
+    echo "see $HTTP_LOG for details" >&2
+    exit 1
+  fi
+}
+
+# Idempotent clone: if dir exists we leave it alone (so re-runs don't
+# nuke local edits). Fresh runs do a real `git clone` from the public
+# template repo and rebuild git history (user gets a clean single-commit
+# history with no upstream tracking).
+_clone_template() {
+  if [ -e "$PROJECT_PATH" ]; then
+    echo "$PROJECT_PATH already exists — skipping clone"
+    return 0
+  fi
+  git clone --depth 1 --quiet "$TEMPLATE_REPO" "$PROJECT_PATH"
+  ( cd "$PROJECT_PATH" \
+    && rm -rf .git \
+    && git init -q \
+    && git add -A \
+    && git -c user.email="$EMAIL" \
+         -c user.name="if template" \
+         -c commit.gpgsign=false \
+         commit -q -m "initial: $PID from if template" )
+}
+
+# Copy the staged auth cred into the project (cp not mv — staging cred
+# stays for future `n` runs, so cmd-auth.mjs's probe → refresh flow
+# avoids browser consent next time).
+_copy_auth_cred() {
+  if [ -f "$TEMPLATE_STAGE/.env.auth.json" ]; then
+    cp "$TEMPLATE_STAGE/.env.auth.json" "$PROJECT_PATH/.env.auth.json"
+    chmod 600 "$PROJECT_PATH/.env.auth.json"
+  fi
+}
+
+# Write root .env that cmd-deploy.mjs reads. .env is gitignored — local
+# to this machine. ACCOUNT_EMAIL pins the gcloud account so multi-account
+# machines deploy from the right one regardless of `gcloud config set
+# account` drift.
+_write_env() {
+  cat > "$PROJECT_PATH/.env" <<ENVEOF
+# Written by n. .env is gitignored — local to this machine.
+# cmd-deploy.mjs reads PROJECT_ID + ACCOUNT_EMAIL from here.
+PROJECT_ID=$PID
+ACCOUNT_EMAIL=$EMAIL
+ENVEOF
+}
+
+# Fetch the Firebase Web config and write client/.env. The "apiKey" is a
+# public project identifier (see https://firebase.google.com/docs/projects/api-keys),
+# safe to ship in the bundle. Real auth is Firebase Auth ID tokens +
+# Firestore security rules.
+_write_client_env() {
+  local list_resp app_id cfg
+  list_resp=$(curl -sfL \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "X-Goog-User-Project: $PID" \
+    "https://firebase.googleapis.com/v1beta1/projects/$PID/webApps") || {
+      http_log "_write_client_env: webApps list failed"; return 1; }
+  app_id=$(printf '%s' "$list_resp" | perl -MJSON::PP -e '
+    my $j = decode_json(join("", <STDIN>));
+    print $j->{apps}[0]{appId} if $j->{apps} && @{$j->{apps}};
+  ')
+  [ -z "$app_id" ] && { http_log "_write_client_env: no appId in webApps list"; return 1; }
+
+  cfg=$(curl -sfL \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "X-Goog-User-Project: $PID" \
+    "https://firebase.googleapis.com/v1beta1/projects/$PID/webApps/$app_id/config") || {
+      http_log "_write_client_env: webApps.getConfig failed for $app_id"; return 1; }
+
+  CFG="$cfg" perl -MJSON::PP -e '
+    my $c = decode_json($ENV{CFG});
+    for my $k (qw(apiKey authDomain projectId storageBucket messagingSenderId appId)) {
+      die "missing $k in webApps.getConfig response\n" unless defined $c->{$k};
+    }
+    print "VITE_FIREBASE_API_KEY=$c->{apiKey}\n";
+    print "VITE_FIREBASE_AUTH_DOMAIN=$c->{authDomain}\n";
+    print "VITE_FIREBASE_PROJECT_ID=$c->{projectId}\n";
+    print "VITE_FIREBASE_STORAGE_BUCKET=$c->{storageBucket}\n";
+    print "VITE_FIREBASE_MESSAGING_SENDER_ID=$c->{messagingSenderId}\n";
+    print "VITE_FIREBASE_APP_ID=$c->{appId}\n";
+  ' > "$PROJECT_PATH/client/.env"
+}
+
+# Seed the project owner's email into Firestore's `allowedEmails` so
+# they can use the app on day one. firestore.rules require an existing
+# membership before allowing reads/writes — without this seed the first
+# user is locked out. The OAuth bearer token has cloud-platform scope
+# (admin), bypasses security rules. 200 = created, 409 = already exists
+# (treated as success so re-runs are no-ops).
+#
+# Schema (see client/src/lib/types/AllowedEmail.ts in the template):
+#   doc id: lowercased email
+#   fields: { email, addedAt (ms epoch), addedBy }
+_seed_allowed_email() {
+  local email_lc now_ms body code
+  email_lc=$(printf '%s' "$EMAIL" | tr '[:upper:]' '[:lower:]')
+  now_ms=$(($(date +%s) * 1000))
+  body=$(printf '{"fields":{"email":{"stringValue":"%s"},"addedAt":{"integerValue":"%d"},"addedBy":{"stringValue":"%s"}}}' \
+    "$email_lc" "$now_ms" "$email_lc")
+  code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "X-Goog-User-Project: $PID" \
+    -H "Content-Type: application/json" \
+    --data "$body" \
+    "https://firestore.googleapis.com/v1/projects/$PID/databases/(default)/documents/allowedEmails?documentId=$email_lc")
+  http_log "_seed_allowed_email: HTTP $code for allowedEmails/$email_lc"
+  case "$code" in
+    200|409) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+_install_deps() { ( cd "$PROJECT_PATH" && npm run install:all ); }
+
+# cmd-deploy.mjs reads PROJECT_ID from .env, runs the build itself, then
+# pushes hosting + firestore rules. Pass GOOGLE_ACCESS_TOKEN explicitly
+# to skip auth.mjs's probe round-trip (we already have a fresh token).
+_deploy_to_fb() {
+  ( cd "$PROJECT_PATH" && \
+    GOOGLE_ACCESS_TOKEN="$ACCESS_TOKEN" node cmd-deploy.mjs )
+}
+
+echo ""
+heading "now: clone, install, deploy"
+echo ""
+_deploy_step "cloning if template into $PROJECT_PATH" _clone_template
+_deploy_step "copying auth cred into project" _copy_auth_cred
+_deploy_step "writing .env (PROJECT_ID, ACCOUNT_EMAIL)" _write_env
+_deploy_step "writing client/.env (firebase web config)" _write_client_env
+_deploy_step "seeding $EMAIL as initial allowed user" _seed_allowed_email
+_deploy_step "installing dependencies (this can take a minute)" _install_deps
+_deploy_step "building + deploying to firebase" _deploy_to_fb
+
+# =====================================================================
+# 14. PROJECT READY
+# =====================================================================
+
+# Clear EXIT trap on success — no need to dump the log.
+trap - EXIT
+
+echo ""
+heading "project ready"
+echo ""
+printf "Live at: ${C_BLU}https://%s.web.app${C_RST}\n" "$PID"
+printf "Code:    %s\n" "$PROJECT_PATH"
+echo ""
+printf "${C_GRAY}next time: run ${C_RST}n${C_GRAY} (alias added to ~/.zshrc) for another project${C_RST}\n"
+echo ""
