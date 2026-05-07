@@ -1,0 +1,14 @@
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "input=$(cat); remaining=$(echo \"$input\" | jq -r '.context_window.remaining_percentage // empty'); [ -n \"$remaining\" ] && printf \"ctx: %.0f%% remaining\" \"$remaining\""
+  },
+  "skipDangerousModePermissionPrompt": true,
+  "voiceEnabled": true,
+  "defaultMode": "bypassPermissions",
+  "autoInstallIdeExtension": false,
+  "awaySummaryEnabled": false
+}
