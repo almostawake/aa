@@ -898,7 +898,6 @@ run_install() {
 # spinner / no install function); missing items go pending → running
 # → done as they install.
 echo ""
-echo ""
 echo "checking/installing dependencies"
 echo ""
 
