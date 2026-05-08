@@ -1537,6 +1537,7 @@ PROV_PENDING=(
   "enable firebase api"
   "add firebase to project"
   "link billing account"
+  "enable cloud billing api"
   "enable eventarc api"
   "enable firestore api"
   "enable cloud storage api"
@@ -1562,6 +1563,7 @@ PROV_RUNNING=(
   "enabling firebase api"
   "adding firebase to project"
   "linking billing account"
+  "enabling cloud billing api"
   "enabling eventarc api"
   "enabling firestore api"
   "enabling cloud storage api"
@@ -1587,6 +1589,7 @@ PROV_DONE=(
   "firebase api enabled"
   "firebase added to project"
   "billing account linked"
+  "cloud billing api enabled"
   "eventarc api enabled"
   "firestore api enabled"
   "cloud storage api enabled"
@@ -1612,6 +1615,7 @@ PROV_FNS=(
   "_prov_enable_firebase"
   "_prov_add_firebase"
   "_prov_link_billing"
+  "_prov_enable_cloudbilling"
   "_prov_enable_eventarc"
   "_prov_enable_firestore"
   "_prov_enable_storage"
@@ -1725,6 +1729,7 @@ _prov_create() {
 _prov_enable_firebase()         { enable_api "$PID" firebase.googleapis.com 1; }
 _prov_add_firebase()            { add_firebase "$PID"; }
 _prov_link_billing()            { link_billing "$PID"; }
+_prov_enable_cloudbilling()     { enable_api "$PID" cloudbilling.googleapis.com; }
 _prov_enable_firestore()        { enable_api "$PID" firestore.googleapis.com; }
 _prov_enable_storage()          { enable_api "$PID" storage.googleapis.com; }
 _prov_enable_firebasestorage()  { enable_api "$PID" firebasestorage.googleapis.com; }
