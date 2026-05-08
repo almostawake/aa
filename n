@@ -1108,7 +1108,7 @@ preflight_check() {
     http_log "preflight: billing list failed: $resp"
     return 1
   fi
-  if ! printf '%s' "$resp" | grep -q '"open"[[:space:]]*:[[:space:]]*true'; then
+  if ! grep -q '"open"[[:space:]]*:[[:space:]]*true' <<< "$resp"; then
     PREFLIGHT_REASON="no_billing"
     http_log "preflight: no open billing account"
     return 1
@@ -1136,8 +1136,8 @@ wait_for_op() {
       http_log "wait_for_op aborting: non-200 status from poll"
       return 1
     fi
-    if printf '%s' "$resp" | grep -q '"done"[[:space:]]*:[[:space:]]*true'; then
-      if printf '%s' "$resp" | grep -q '"error"'; then
+    if grep -q '"done"[[:space:]]*:[[:space:]]*true' <<< "$resp"; then
+      if grep -q '"error"' <<< "$resp"; then
         http_log "wait_for_op error from $url"
         return 1
       fi
@@ -1172,10 +1172,10 @@ create_project() {
   local body; body=$(cat "$tmp"); rm -f "$tmp"
   http_log "create_project $pid → HTTP $code body: $(log_trunc "$body")"
 
-  if [ "$code" = "409" ] || printf '%s' "$body" | grep -qi 'already.*exists\|ALREADY_EXISTS'; then
+  if [ "$code" = "409" ] || grep -qi 'already.*exists\|ALREADY_EXISTS' <<< "$body"; then
     printf '%s' "taken"; return
   fi
-  if printf '%s' "$body" | grep -qiE 'RESOURCE_EXHAUSTED|maximum.*number.*of.*projects|project.*limit|quota'; then
+  if grep -qiE 'RESOURCE_EXHAUSTED|maximum.*number.*of.*projects|project.*limit|quota' <<< "$body"; then
     printf '%s' "quota"; return
   fi
   if [ "$code" != "200" ] && [ "$code" != "201" ]; then
@@ -1196,12 +1196,12 @@ create_project() {
     sleep 1
     resp=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
       "https://cloudresourcemanager.googleapis.com/v3/$op_name")
-    if printf '%s' "$resp" | grep -q '"done"[[:space:]]*:[[:space:]]*true'; then
-      if printf '%s' "$resp" | grep -q '"error"'; then
-        if printf '%s' "$resp" | grep -qi 'already.*exists\|ALREADY_EXISTS'; then
+    if grep -q '"done"[[:space:]]*:[[:space:]]*true' <<< "$resp"; then
+      if grep -q '"error"' <<< "$resp"; then
+        if grep -qi 'already.*exists\|ALREADY_EXISTS' <<< "$resp"; then
           printf '%s' "taken"; return
         fi
-        if printf '%s' "$resp" | grep -qiE 'RESOURCE_EXHAUSTED|maximum.*number.*of.*projects|project.*limit|quota'; then
+        if grep -qiE 'RESOURCE_EXHAUSTED|maximum.*number.*of.*projects|project.*limit|quota' <<< "$resp"; then
           printf '%s' "quota"; return
         fi
         local msg
@@ -1235,7 +1235,7 @@ enable_api() {
   # Already-enabled services return operations/noop.DONE_OPERATION with
   # done:true right in the response — that's NOT a real op, polling
   # 400s with "Invalid operation id". Treat done:true as success.
-  if printf '%s' "$body" | grep -q '"done"[[:space:]]*:[[:space:]]*true'; then
+  if grep -q '"done"[[:space:]]*:[[:space:]]*true' <<< "$body"; then
     http_log "enable_api $api: completed synchronously (already enabled)"
     return 0
   fi
@@ -1265,7 +1265,7 @@ link_billing() {
     -H "Authorization: Bearer $ACCESS_TOKEN" \
     "https://cloudbilling.googleapis.com/v1/projects/$pid/billingInfo")
   http_log "link_billing $pid current: $(log_trunc "$cur_resp")"
-  if printf '%s' "$cur_resp" | grep -q '"billingEnabled"[[:space:]]*:[[:space:]]*true'; then
+  if grep -q '"billingEnabled"[[:space:]]*:[[:space:]]*true' <<< "$cur_resp"; then
     http_log "link_billing $pid: already linked, skipping"
     return 0
   fi
@@ -1331,7 +1331,7 @@ add_firebase() {
   local body; body=$(cat "$tmp"); rm -f "$tmp"
   http_log "add_firebase $pid → HTTP $code body: $(log_trunc "$body")"
 
-  if [ "$code" = "400" ] && printf '%s' "$body" | grep -qi 'terms.of.service\|console\.developers\.google\.com/terms'; then
+  if [ "$code" = "400" ] && grep -qi 'terms.of.service\|console\.developers\.google\.com/terms' <<< "$body"; then
     PREFLIGHT_REASON="no_firebase_tos"
     return 1
   fi
@@ -1355,7 +1355,7 @@ create_web_app() {
     -H "X-Goog-User-Project: $pid" \
     "https://firebase.googleapis.com/v1beta1/projects/$pid/webApps")
   http_log "create_web_app $pid skip-check list: $(log_trunc "$list_resp")"
-  if printf '%s' "$list_resp" | grep -q '"appId"'; then
+  if grep -q '"appId"' <<< "$list_resp"; then
     http_log "create_web_app $pid: web app exists, skipping"
     return 0
   fi
@@ -1423,7 +1423,7 @@ create_storage_bucket() {
     -H "X-Goog-User-Project: $pid" \
     "https://firebasestorage.googleapis.com/v1beta/projects/$pid/buckets")
   http_log "create_storage_bucket $pid skip-check list: $(log_trunc "$list_resp")"
-  if printf '%s' "$list_resp" | grep -q '"bucket"'; then
+  if grep -q '"bucket"' <<< "$list_resp"; then
     http_log "create_storage_bucket $pid: bucket exists, skipping"
     return 0
   fi
@@ -2112,44 +2112,13 @@ deploy_all
 trap - EXIT
 
 echo ""
-echo "project ready"
-echo ""
-printf "Live at: https://%s.web.app\n" "$PID"
-printf "Code:    %s\n" "$PROJECT_PATH"
-echo ""
-printf "next time: run n (alias added to ~/.zshrc) for another project\n"
+printf "your template project is live at https://%s.web.app\n" "$PID"
 
-# Open VS Code on the new project. .vscode/tasks.json with runOn:folderOpen
-# auto-launches `cc` in a new integrated terminal — first time, the user
-# gets Claude Code's login prompt right there. The seeded user setting
-# `task.allowAutomaticTasks: "on"` skips VS Code's per-folder confirm.
-#
-# Self-deleting: the task body rm's tasks.json before exec'ing cc. After
-# first folderOpen, the file is gone and future opens of this project do
-# nothing. Keeps the welcome behaviour scoped to the genuine "first use"
-# moment without leaving a permanent cc-on-open hook in the project.
-#
-# Only write tasks.json if absent so re-runs don't clobber user edits
-# (e.g. an existing project where the user has their own tasks).
+# Open VS Code on the new project. The auto-launch-Claude-in-VS-Code-
+# integrated-terminal trick (via .vscode/tasks.json + runOn:folderOpen)
+# was unreliable so we dropped it; VS Code just opens at the project,
+# user kicks off claude themselves.
 if [ "$OS" = "darwin" ] && [ -d "$HOME/Applications/Visual Studio Code.app" ]; then
-  if [ ! -f "$PROJECT_PATH/.vscode/tasks.json" ]; then
-    mkdir -p "$PROJECT_PATH/.vscode"
-    cat > "$PROJECT_PATH/.vscode/tasks.json" <<'TASKSJSON'
-{
-  "version": "2.0.0",
-  "tasks": [
-    {
-      "label": "claude (first launch only)",
-      "type": "shell",
-      "command": "rm -f .vscode/tasks.json && cc",
-      "presentation": { "reveal": "always", "panel": "new", "focus": true },
-      "runOptions": { "runOn": "folderOpen" },
-      "problemMatcher": []
-    }
-  ]
-}
-TASKSJSON
-  fi
   ( "$IF_HOME/vscode/bin/code" "$PROJECT_PATH" >/dev/null 2>&1 & ) || true
 fi
 echo ""
