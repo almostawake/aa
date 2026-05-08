@@ -2080,12 +2080,8 @@ _install_deps() { ( cd "$PROJECT_PATH" && npm run install:all ); }
 # synthesizes ADC creds from .env.auth.json, then shells out to
 # firebase-tools (which builds via firebase.json predeploy + pushes
 # hosting / firestore rules + indexes / storage rules / functions).
-#
-# --force: auto-creates the gcf-artifacts cleanup policy (1d default)
-# so the post-deploy "no cleanup policy detected" error doesn't fail
-# the run. cmd-deploy.mjs forwards extra args straight to firebase-tools.
 _deploy_to_fb() {
-  ( cd "$PROJECT_PATH" && npm run deploy -- --force )
+  ( cd "$PROJECT_PATH" && npm run deploy )
 }
 
 # --- row UI for the deploy phase ---
