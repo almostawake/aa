@@ -10,6 +10,7 @@
     "terminal.integrated.enablePersistentSessions": false,
     "terminal.integrated.persistentSessionReviveProcess": "never",
     "security.workspace.trust.untrustedFiles": "open",
+    "security.workspace.trust.enabled": false,
     "claudeCode.preferredLocation": "panel",
     "window.newWindowDimensions": "maximized",
     "workbench.activityBar.location": "top",
