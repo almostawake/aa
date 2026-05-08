@@ -804,7 +804,7 @@ IFTERMSCPT
     while [ "$i" -ge 0 ]; do
       bid=$(/usr/libexec/PlistBuddy -c "Print :persistent-apps:$i:tile-data:bundle-identifier" "$DOCK_PLIST" 2>/dev/null || true)
       case "$bid" in
-        com.apple.Safari|com.apple.systempreferences) : ;;
+        com.apple.systempreferences) : ;;
         *) /usr/libexec/PlistBuddy -c "Delete :persistent-apps:$i" "$DOCK_PLIST" 2>/dev/null || true ;;
       esac
       i=$((i-1))
@@ -837,7 +837,8 @@ IFTERMSCPT
   _dock_apps_remove_url "$url_chrome"
   _dock_apps_remove_url "$url_term"
   _dock_apps_remove_url "$url_shell_legacy"
-  _dock_apps_insert_at_zero "$url_term"
+  # IF Terminal not pinned — keep the remove-url above so existing
+  # installs lose it on re-run.
   _dock_apps_insert_at_zero "$url_chrome"
   _dock_apps_insert_at_zero "$url_vscode"
 
