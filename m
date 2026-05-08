@@ -399,6 +399,25 @@ _install_java() {
   export PATH="$JAVA_HOME/bin:$PATH"
 }
 
+# Merge a "trust this directory" entry into ~/.if/claude-config/.claude.json.
+# Idempotent — running twice is a no-op. Preserves the rest of the file
+# (numStartups, tipsHistory, all the other onboarding state Claude Code
+# reads/writes constantly).
+_trust_path() {
+  local trust_path="$1"
+  local cred="$IF_HOME/claude-config/.claude.json"
+  [ -f "$cred" ] || printf '{}\n' > "$cred"
+  local tmp; tmp=$(mktemp)
+  PATH_TO_TRUST="$trust_path" perl -MJSON::PP -e '
+    local $/;
+    my $j = decode_json(<STDIN>);
+    $j->{projects}{$ENV{PATH_TO_TRUST}} //= {};
+    $j->{projects}{$ENV{PATH_TO_TRUST}}{hasTrustDialogAccepted} = JSON::PP::true;
+    $j->{projects}{$ENV{PATH_TO_TRUST}}{hasCompletedProjectOnboarding} = JSON::PP::true;
+    print JSON::PP->new->pretty->canonical->encode($j);
+  ' < "$cred" > "$tmp" && mv "$tmp" "$cred"
+}
+
 # Claude Code binary + YOLO config files. Theme is auto-picked from
 # the user's macOS appearance on first install only — re-runs preserve
 # whatever theme the user later picked via Claude's /theme command.
@@ -438,6 +457,12 @@ _install_claude() {
       ' < "$claude_json" > "$tmp" && mv "$tmp" "$claude_json"
     fi
   fi
+
+  # Pre-trust common cwds so the "Do you trust this folder?" prompt
+  # doesn't fire on first launch from VS Code / IF Terminal / wherever
+  # users typically open Claude.
+  _trust_path "$HOME/if"
+  _trust_path "${PROJECT_DIR:-$HOME/Projects}"
 }
 
 # Chrome Stable + Chrome with Claude Code.app launcher.
