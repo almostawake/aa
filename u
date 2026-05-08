@@ -19,9 +19,17 @@
 #   ~/.claude.json                                   — Claude Code top-level config
 #   ~/Applications/Google Chrome.app                 — our user-level Chrome install
 #   ~/Applications/Chrome with Claude Code.app       — our launcher bundle
+#   ~/Applications/Visual Studio Code.app            — our user-level VS Code install
 #   ~/Library/Application Support/Google/Chrome-Claude/  — our debug-port profile
 #   ~/Library/Application Support/Google/Chrome/     — default profile (just the
 #                                                      DevToolsActivePort crumb we drop)
+#   ~/Library/Application Support/Code/              — VS Code user state (settings,
+#                                                      keybindings, state.vscdb, sync,
+#                                                      globalStorage). Wiping this is
+#                                                      what makes the welcome dialog
+#                                                      reproduce on next install.
+#   ~/.vscode/                                       — VS Code extensions install dir
+#   ~/.vscode-cli/                                   — VS Code CLI auth tokens (if any)
 #   /tmp/if-install.log                              — per-run install trace
 #
 # Leaves alone:
@@ -64,6 +72,20 @@ if pgrep -U "$(id -u)" -f "$CHROME_MATCH" >/dev/null 2>&1; then
   done
 fi
 
+# --- Same trick for VS Code: kill anything running out of our installed bundle ---
+# Matches both the Electron parent and renderer/helper processes since they all
+# carry the bundle path on their command line. Scoped to ~/Applications so we
+# don't touch a system-installed VS Code at /Applications/.
+VSCODE_MATCH="$HOME/Applications/Visual Studio Code.app"
+if pgrep -U "$(id -u)" -f "$VSCODE_MATCH" >/dev/null 2>&1; then
+  say "Quitting VS Code..."
+  pkill -9 -U "$(id -u)" -f "$VSCODE_MATCH" 2>/dev/null || true
+  for i in $(seq 1 10); do
+    pgrep -U "$(id -u)" -f "$VSCODE_MATCH" >/dev/null 2>&1 || break
+    sleep 0.5
+  done
+fi
+
 paths=(
   "$HOME/.if"
   "$HOME/if"
@@ -74,8 +96,12 @@ paths=(
   "$HOME/Applications/Google Chrome.app"
   "$HOME/Applications/Chrome with Claude Code.app"
   "$HOME/Applications/IF Terminal.app"
+  "$HOME/Applications/Visual Studio Code.app"
   "$HOME/Library/Application Support/Google/Chrome-Claude"
   "$HOME/Library/Application Support/Google/Chrome"
+  "$HOME/Library/Application Support/Code"
+  "$HOME/.vscode"
+  "$HOME/.vscode-cli"
   "$HOME/Library/Services/Claude Code at Folder.workflow"
   "/tmp/if-install.log"
 )
@@ -156,6 +182,7 @@ if [ -f "$DOCK_PLIST" ]; then
   scrub_dock_section "persistent-others" "file://$HOME/if/"
   scrub_dock_section "persistent-apps"   "file://$HOME/Applications/Chrome%20with%20Claude%20Code.app/"
   scrub_dock_section "persistent-apps"   "file://$HOME/Applications/IF%20Terminal.app/"
+  scrub_dock_section "persistent-apps"   "file://$HOME/Applications/Visual%20Studio%20Code.app/"
   scrub_dock_section "persistent-apps"   "file://$HOME/.if/bin/shell.command"
 fi
 killall Dock 2>/dev/null || true
