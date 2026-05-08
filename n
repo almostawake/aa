@@ -2123,7 +2123,14 @@ printf "next time: run n (alias added to ~/.zshrc) for another project\n"
 # auto-launches `cc` in a new integrated terminal — first time, the user
 # gets Claude Code's login prompt right there. The seeded user setting
 # `task.allowAutomaticTasks: "on"` skips VS Code's per-folder confirm.
-# Only write tasks.json if absent so re-runs don't clobber user edits.
+#
+# Self-deleting: the task body rm's tasks.json before exec'ing cc. After
+# first folderOpen, the file is gone and future opens of this project do
+# nothing. Keeps the welcome behaviour scoped to the genuine "first use"
+# moment without leaving a permanent cc-on-open hook in the project.
+#
+# Only write tasks.json if absent so re-runs don't clobber user edits
+# (e.g. an existing project where the user has their own tasks).
 if [ "$OS" = "darwin" ] && [ -d "$HOME/Applications/Visual Studio Code.app" ]; then
   if [ ! -f "$PROJECT_PATH/.vscode/tasks.json" ]; then
     mkdir -p "$PROJECT_PATH/.vscode"
@@ -2132,9 +2139,9 @@ if [ "$OS" = "darwin" ] && [ -d "$HOME/Applications/Visual Studio Code.app" ]; t
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "claude",
+      "label": "claude (first launch only)",
       "type": "shell",
-      "command": "cc",
+      "command": "rm -f .vscode/tasks.json && cc",
       "presentation": { "reveal": "always", "panel": "new", "focus": true },
       "runOptions": { "runOn": "folderOpen" },
       "problemMatcher": []

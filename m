@@ -1071,5 +1071,27 @@ printf "PROJECT_DIR: %s\n" "$PROJECT_DIR_M"
 echo ""
 
 if [ "$OS" = "darwin" ] && [ -d "$HOME/Applications/Visual Studio Code.app" ]; then
+  # Drop a self-deleting tasks.json that runs `cc` once on folderOpen,
+  # then rm's itself. Exercises the same first-use path n uses for real
+  # projects. Re-runs of m re-create the tasks.json (the previous open
+  # already deleted it), so testing always sees the cc prompt.
+  if [ ! -f "$PROJECT_DIR_M/.vscode/tasks.json" ]; then
+    mkdir -p "$PROJECT_DIR_M/.vscode"
+    cat > "$PROJECT_DIR_M/.vscode/tasks.json" <<'TASKSJSON'
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "claude (first launch only)",
+      "type": "shell",
+      "command": "rm -f .vscode/tasks.json && cc",
+      "presentation": { "reveal": "always", "panel": "new", "focus": true },
+      "runOptions": { "runOn": "folderOpen" },
+      "problemMatcher": []
+    }
+  ]
+}
+TASKSJSON
+  fi
   ( "$IF_HOME/vscode/bin/code" "$PROJECT_DIR_M" >/dev/null 2>&1 & ) || true
 fi
