@@ -653,6 +653,28 @@ _install_vscode() {
   [ -f "$code_user/keybindings.json" ] || \
     curl -fsSL "$base/assets/vscode-keybindings.json" -o "$code_user/keybindings.json"
 
+  # Pre-seed state.vscdb to suppress the "Welcome to VS Code — Sign in to
+  # continue with AI-powered development" modal that fires on first
+  # launch. settings.json's `chat.disableAIFeatures: true` does NOT gate
+  # this modal — the gate lives in globalStorage/state.vscdb. Keys
+  # derived empirically: clicked "Continue without Signing In" on a
+  # fresh VM install and dumped the resulting rows. `welcomeOnboarding.state`
+  # is the primary flag; the other three are written alongside by VS
+  # Code, included for parity. Skipped if the DB already exists so re-runs
+  # preserve whatever state VS Code has accumulated since.
+  local code_global="$code_user/globalStorage"
+  mkdir -p "$code_global"
+  local state_db="$code_global/state.vscdb"
+  if [ ! -f "$state_db" ] && command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "$state_db" <<'STATESEED'
+CREATE TABLE IF NOT EXISTS ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);
+INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('welcomeOnboarding.state', 'true');
+INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('chat.setupContext', '{"installed":true,"disabled":true,"disabledInWorkspace":false}');
+INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('chat.setupContext.migrated.v1', 'true');
+INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('builtinChatExtensionEnablementMigration', 'true');
+STATESEED
+  fi
+
   local installed
   installed=$("$IF_HOME/vscode/bin/code" --list-extensions 2>/dev/null || true)
   local ext
