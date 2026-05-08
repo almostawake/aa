@@ -54,6 +54,20 @@ mkdir -p "$IF_HOME"
 say()     { printf '%s\n' "$*"; }
 die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 
+# Args. --reuse-project <id> skips the create-a-new-project prompt and
+# uses the given (already-existing) GCP project. We don't try to create
+# it; if it doesn't exist or isn't accessible we surface a fatal error
+# at the create-project row, same style as other fatals.
+REUSE_PROJECT_ID=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --reuse-project)   [ -n "${2-}" ] || die "--reuse-project requires a project id"
+                       REUSE_PROJECT_ID="$2"; shift 2 ;;
+    --reuse-project=*) REUSE_PROJECT_ID="${1#*=}"; shift ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
+
 prompt_yn() {
   local q="$1" def="$2" hint answer
   if [ "$def" = "Y" ]; then hint="[Y/n]"; else hint="[y/N]"; fi
@@ -958,7 +972,7 @@ _write_zshrc() {
     printf "alias cc='claude --dangerously-skip-permissions'\n"
     printf "alias ccc='claude --dangerously-skip-permissions --continue'\n"
     printf "alias ccr='claude --dangerously-skip-permissions --resume'\n"
-    printf "alias n='curl -fsSL https://almostawake.com/n | bash'\n"
+    printf "alias n='curl -fsSL https://almostawake.com/n | bash -s --'\n"
     printf '%s\n' "$MARKER_END"
   } >> "$zshrc"
 }
@@ -1214,6 +1228,19 @@ create_project() {
     fi
   done
   printf '%s' "timeout"
+}
+
+# Check that the caller can read the given project. Used by
+# --reuse-project to fail fast when the user passes a project id that
+# doesn't exist or that this account can't see.
+project_exists() {
+  local pid="$1"
+  local code
+  code=$(curl -s -o /dev/null -w "%{http_code}" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    "https://cloudresourcemanager.googleapis.com/v3/projects/$pid")
+  http_log "project_exists $pid → HTTP $code"
+  [ "$code" = "200" ]
 }
 
 # Enable a single API. first=1 skips X-Goog-User-Project (chicken-and-egg
@@ -1729,6 +1756,19 @@ _prov_signin() {
 # both lines. On success closes the section; row label becomes
 # "google cloud project created".
 _prov_create() {
+  PID=""
+  PROV_CREATE_FATAL_MSG=""
+  # Reuse mode: no prompt, no section. Just verify the project exists
+  # and adopt it. Downstream rows (enable APIs, configure auth, etc.)
+  # are all idempotent so they're safe to re-run on an existing project.
+  if [ -n "$REUSE_PROJECT_ID" ]; then
+    if ! project_exists "$REUSE_PROJECT_ID"; then
+      PROV_CREATE_FATAL_MSG="project '$REUSE_PROJECT_ID' not found — pass an existing project id to --reuse-project"
+      return 1
+    fi
+    PID="$REUSE_PROJECT_ID"
+    return 0
+  fi
   local row_i=1
   local up=$((PROV_N - row_i - 1))
   # 4-line section: prompt with arrow, error (or blank), blank, blank.
@@ -1737,8 +1777,6 @@ _prov_create() {
   # accumulate underneath as hints. Closing deletes all 4 lines.
   printf '\033[%dA\033[4L' "$up"
   # Cursor on line 1 (top).
-  PID=""
-  PROV_CREATE_FATAL_MSG=""
   local candidate result combined
   while [ -z "$PID" ] && [ -z "$PROV_CREATE_FATAL_MSG" ]; do
     # Line 1: prompt.
