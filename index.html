@@ -145,6 +145,26 @@
         color: var(--fg);
         overflow-wrap: anywhere;
       }
+      .copy-btn {
+        font: inherit;
+        font-size: 0.85em;
+        margin-left: 0.4em;
+        padding: 0.05em 0.6em;
+        background: #fff;
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        color: var(--fg-muted);
+        cursor: pointer;
+        vertical-align: baseline;
+      }
+      .copy-btn:hover {
+        color: var(--fg);
+        border-color: var(--fg-muted);
+      }
+      .copy-btn.copied {
+        color: var(--fg);
+        background: #f5f5f5;
+      }
       .ascii-art {
         font-family: inherit;
         color: var(--fg);
@@ -177,7 +197,7 @@
     </p>
     <p>
       you're in the right place if you've done the math on where your corporate
-      job will be in five years — and you'd rather build your ai skills and a
+      job will be in five years - and you'd rather build your ai skills and a
       small side hustle now, while you've still got a steady paycheck
     </p>
 
@@ -198,10 +218,10 @@
         guidance on what to do (and what not to do)
       </li>
       <li>
-        <b>comraderie</b> .. being amongst like-minded builders who love solving
-        real-world problems with tech solutions means you're no longer alone -
-        and we offer in-person training courses (ah, the irony) if you want an
-        initial boost
+        <b>camaraderie</b> .. being amongst like-minded builders who love
+        solving real-world problems with tech solutions means you're no longer
+        alone - and we offer in-person training courses (ah, the irony) if you
+        want an initial boost
       </li>
     </ol>
 
@@ -233,15 +253,15 @@
       <li>
         create a <b>dedicated gmail account</b> for your initial learning
         journey with claude. this avoids the gnarly worry when you want to give
-        your app access to a calender or gmail but feel uncomfortable giving
+        your app access to a calendar or gmail but feel uncomfortable giving
         carte-blanche to your personal data. this way claude has (and you have)
-        free reign in an empty account
+        free rein in an empty account
       </li>
       <li>
         create a <b>dedicated mac user</b> (without admin rights) on your local
-        machine, so claude can't see any of your personal data. so nothing
-        claude or your apps do can leak out of the sandbox or touch the rest of
-        your machine.
+        machine, so claude can't see any of your personal data. nothing claude
+        or your apps do can leak out of the sandbox or touch the rest of your
+        machine
       </li>
     </ul>
 
@@ -270,7 +290,7 @@
           <li>important .. <b>don't reuse your personal account</b></li>
           <li>
             you'll feel less restricted to play with automations around email
-            and calendarsin particular, if it's a dedicated, separate account
+            and calendars in particular, if it's a dedicated, separate account
           </li>
           <li>
             plus - you'll get <b>new</b> ~ AUD $400 free credits for google
@@ -278,9 +298,10 @@
             .. not that you'll need them
           </li>
           <li>
-            if google refuses you mobile verification with "used too many times"
-            consider a one-time $15 sim. you don't need to use this number
-            post-registration
+            google limits how many accounts you can create per phone number, so
+            if it refuses yours, just borrow a friend's - it's only used for
+            one-time signup, not future auth. or grab a one-time $15 sim if
+            you'd rather not ask
           </li>
         </ul>
       </li>
@@ -306,7 +327,7 @@
           <li>set up 2fa if prompted</li>
           <li>accept terms</li>
           <li>
-            fill in contact & payment method<br />
+            fill in contact &amp; payment method<br />
             .. credit card isn't auto-charged post trial
           </li>
           <li>"start free"</li>
@@ -354,7 +375,9 @@
             .. make it easy to swap back/forth
           </li>
           <li>
-            then switch to the new user (open this page once you're there)
+            then switch to the new users<br />
+            .. skip all the first-time stuff, leave siri, icloud etc off<br />
+            .. open this page again once you're there
           </li>
           <li>optional: set fast user switching again, reverse direction</li>
           <li>
@@ -370,8 +393,21 @@
     <ul>
       <li><code>applications -&gt; utilities -&gt; terminal</code></li>
       <li>
+        for the next step, make sure the terminal is visible at all times,
+        especially when chrome pops up to authenticate you. otherwise you'll
+        wonder why it's stopped (it waits for input after you log into your
+        gmail account)
+      </li>
+      <li>
         copy/paste:
-        <code>curl -fsSL https://almostawake.com/n | bash</code><br />
+        <code>curl -fsSL https://almostawake.com/n | bash</code>
+        <button
+          class="copy-btn"
+          data-copy="curl -fsSL https://almostawake.com/n | bash"
+        >
+          copy
+        </button>
+        <br />
         .. hit return. you're on your way
       </li>
     </ul>
@@ -399,7 +435,7 @@
 
     <p>
       we're putting together the next steps. check back soon, or drop andrew a
-      line below if you want to be pinged when there's more.
+      line below if you want to be pinged when there's more
     </p>
 
     <p class="footer">
@@ -416,6 +452,23 @@
       };
       window.addEventListener("scroll", onScroll, { passive: true });
       onScroll();
+
+      document.querySelectorAll(".copy-btn").forEach(function (btn) {
+        btn.addEventListener("click", async function () {
+          try {
+            await navigator.clipboard.writeText(btn.dataset.copy);
+            var orig = btn.textContent.trim();
+            btn.textContent = "copied!";
+            btn.classList.add("copied");
+            setTimeout(function () {
+              btn.textContent = orig;
+              btn.classList.remove("copied");
+            }, 1500);
+          } catch (e) {
+            console.error(e);
+          }
+        });
+      });
     </script>
   </body>
 </html>
