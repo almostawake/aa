@@ -415,15 +415,21 @@ _install_claude() {
   export PATH="$IF_HOME/claude/bin:$PATH"
   npm install --prefix "$IF_HOME/claude" -g @anthropic-ai/claude-code
 
-  mkdir -p "$IF_HOME/claude-config/.claude"
+  mkdir -p "$IF_HOME/claude-config"
   # Seed config files from the bundled assets curl'd from our website.
   # Fetched on demand (rather than baked into this script) so we can
   # update them without bumping n.
+  #
+  # Layout under CLAUDE_CONFIG_DIR — files sit DIRECTLY in the dir,
+  # NOT in a `.claude/` subdir. Verified the hard way: when settings
+  # were at `<dir>/.claude/settings.json`, Claude Code silently
+  # ignored them (autoInstallIdeExtension, defaultMode, statusline,
+  # all of it). The dir IS the equivalent of `~/.claude/` itself.
   local base="https://almostawake.com"
-  [ -f "$IF_HOME/claude-config/.claude/CLAUDE.md" ] || \
-    curl -fsSL "$base/assets/claude.md" -o "$IF_HOME/claude-config/.claude/CLAUDE.md"
-  [ -f "$IF_HOME/claude-config/.claude/settings.json" ] || \
-    curl -fsSL "$base/assets/claude-settings.json" -o "$IF_HOME/claude-config/.claude/settings.json"
+  [ -f "$IF_HOME/claude-config/CLAUDE.md" ] || \
+    curl -fsSL "$base/assets/claude.md" -o "$IF_HOME/claude-config/CLAUDE.md"
+  [ -f "$IF_HOME/claude-config/settings.json" ] || \
+    curl -fsSL "$base/assets/claude-settings.json" -o "$IF_HOME/claude-config/settings.json"
 
   local claude_json="$IF_HOME/claude-config/.claude.json"
   if [ ! -f "$claude_json" ]; then
