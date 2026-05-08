@@ -54,19 +54,35 @@ mkdir -p "$IF_HOME"
 say()     { printf '%s\n' "$*"; }
 die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-# Args. --reuse-project <id> skips the create-a-new-project prompt and
-# uses the given (already-existing) GCP project. We don't try to create
-# it; if it doesn't exist or isn't accessible we surface a fatal error
-# at the create-project row, same style as other fatals.
+# Args.
+#   --reuse-project <id>  skip the create-a-new-project prompt and use
+#                         the given (already-existing) GCP project. We
+#                         don't try to create it; if it doesn't exist
+#                         or isn't accessible we surface a fatal error
+#                         at the create-project row, same style as
+#                         other fatals.
+#   --auth <path>         skip the OAuth browser flow and reuse the
+#                         given .env.auth.json cred file. We drop the
+#                         file at $IF_HOME/.env.auth.json and let
+#                         cmd-auth.mjs probe it (its built-in
+#                         "valid? reuse silently" path).
 REUSE_PROJECT_ID=""
+AUTH_FILE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --reuse-project)   [ -n "${2-}" ] || die "--reuse-project requires a project id"
                        REUSE_PROJECT_ID="$2"; shift 2 ;;
     --reuse-project=*) REUSE_PROJECT_ID="${1#*=}"; shift ;;
+    --auth)            [ -n "${2-}" ] || die "--auth requires a path"
+                       AUTH_FILE="$2"; shift 2 ;;
+    --auth=*)          AUTH_FILE="${1#*=}"; shift ;;
     *) die "unknown argument: $1" ;;
   esac
 done
+if [ -n "$AUTH_FILE" ]; then
+  [ -f "$AUTH_FILE" ] && [ -r "$AUTH_FILE" ] \
+    || die "--auth file '$AUTH_FILE' not found or not readable"
+fi
 
 prompt_yn() {
   local q="$1" def="$2" hint answer
@@ -216,7 +232,8 @@ fi
 # only "installed" when both exist.
 have_chrome=false
 if [ "$OS" = "darwin" ]; then
-  if [ -d "$HOME/Applications/Chrome with Claude Code.app" ] && \
+  if { [ -d "$HOME/Applications/Chrome with Claude Code.app" ] || \
+       [ -d "/Applications/Chrome with Claude Code.app" ]; } && \
      { [ -d "$HOME/Applications/Google Chrome.app" ] || \
        [ -d "/Applications/Google Chrome.app" ]; }; then
     have_chrome=true
@@ -224,7 +241,9 @@ if [ "$OS" = "darwin" ]; then
 fi
 
 have_vscode=false
-if [ "$OS" = "darwin" ] && [ -d "$HOME/Applications/Visual Studio Code.app" ]; then
+if [ "$OS" = "darwin" ] && \
+   { [ -d "$HOME/Applications/Visual Studio Code.app" ] || \
+     [ -d "/Applications/Visual Studio Code.app" ]; }; then
   have_vscode=true
 fi
 
@@ -1086,7 +1105,11 @@ echo ""
 # cmd-auth.mjs would probe it, find it valid, and silently reuse the
 # old account for this new project — bypassing the fresh-sign-in-per-
 # project model).
+# With --auth: the user explicitly wants to reuse a specific cred, so
+# we drop it in after the wipe. cmd-auth.mjs then probes, finds it
+# valid, and skips the browser flow.
 rm -f "$IF_HOME/.env.auth.json"
+[ -n "$AUTH_FILE" ] && cp "$AUTH_FILE" "$IF_HOME/.env.auth.json"
 
 # Fetch cmd-auth.mjs fresh — small file, idempotent. Lands at
 # ~/.if/cmd-auth.mjs; cred will land alongside as .env.auth.json.
@@ -2057,8 +2080,12 @@ _install_deps() { ( cd "$PROJECT_PATH" && npm run install:all ); }
 # synthesizes ADC creds from .env.auth.json, then shells out to
 # firebase-tools (which builds via firebase.json predeploy + pushes
 # hosting / firestore rules + indexes / storage rules / functions).
+#
+# --force: auto-creates the gcf-artifacts cleanup policy (1d default)
+# so the post-deploy "no cleanup policy detected" error doesn't fail
+# the run. cmd-deploy.mjs forwards extra args straight to firebase-tools.
 _deploy_to_fb() {
-  ( cd "$PROJECT_PATH" && npm run deploy )
+  ( cd "$PROJECT_PATH" && npm run deploy -- --force )
 }
 
 # --- row UI for the deploy phase ---

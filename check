@@ -96,7 +96,8 @@ fi
 
 have_chrome=false
 if [ "$OS" = "darwin" ]; then
-  if [ -d "$HOME/Applications/Chrome with Claude Code.app" ] && \
+  if { [ -d "$HOME/Applications/Chrome with Claude Code.app" ] || \
+       [ -d "/Applications/Chrome with Claude Code.app" ]; } && \
      { [ -d "$HOME/Applications/Google Chrome.app" ] || \
        [ -d "/Applications/Google Chrome.app" ]; }; then
     have_chrome=true
@@ -104,7 +105,9 @@ if [ "$OS" = "darwin" ]; then
 fi
 
 have_vscode=false
-if [ "$OS" = "darwin" ] && [ -d "$HOME/Applications/Visual Studio Code.app" ]; then
+if [ "$OS" = "darwin" ] && \
+   { [ -d "$HOME/Applications/Visual Studio Code.app" ] || \
+     [ -d "/Applications/Visual Studio Code.app" ]; }; then
   have_vscode=true
 fi
 
