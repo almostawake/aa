@@ -1782,7 +1782,7 @@ _clone_template() {
 
 # Move (not copy) the auth cred from ~/.if/ into the project. We
 # deliberately don't keep a central copy — fresh sign-in per project,
-# each project owns its own cred for future `node cmd-deploy.mjs`.
+# each project owns its own cred for future `npm run deploy*`.
 _move_auth_cred() {
   if [ -f "$IF_HOME/.env.auth.json" ]; then
     mv "$IF_HOME/.env.auth.json" "$PROJECT_PATH/.env.auth.json"
@@ -1790,15 +1790,15 @@ _move_auth_cred() {
   fi
 }
 
-# Write root .env that cmd-deploy.mjs reads. .env is gitignored — local
-# to this machine. ACCOUNT_EMAIL pins the gcloud account so multi-account
-# machines deploy from the right one regardless of `gcloud config set
-# account` drift.
+# Write root .env that the deploy wrapper reads. .env is gitignored —
+# local to this machine. ACCOUNT_EMAIL pins the gcloud account so
+# multi-account machines deploy from the right one regardless of
+# `gcloud config set account` drift.
 _write_env() {
   cat > "$PROJECT_PATH/.env" <<ENVEOF
 # Written by n. .env is gitignored — local to this machine.
-# cmd-deploy.mjs reads PROJECT_ID + ACCOUNT_EMAIL from here.
-PROJECT_ID=$PID
+# Deploy wrapper reads THIS_PROJECT_ID_ON_GOOGLE_HOSTING + ACCOUNT_EMAIL.
+THIS_PROJECT_ID_ON_GOOGLE_HOSTING=$PID
 ACCOUNT_EMAIL=$EMAIL
 ENVEOF
 }
@@ -1840,6 +1840,22 @@ _write_client_env() {
   ' > "$PROJECT_PATH/client/.env"
 }
 
+# Write functions/.env with the bouncer key — the secret other services
+# must send when calling our cloud functions. functions/ may not exist
+# yet (template ships without function code), so mkdir first. Empty
+# value: the user fills it in (or generates) when adding their first
+# function. .env is gitignored so the secret never reaches the repo.
+_write_functions_env() {
+  mkdir -p "$PROJECT_PATH/functions"
+  cat > "$PROJECT_PATH/functions/.env" <<ENVEOF
+# Written by n. functions/.env is gitignored — local to this machine.
+# Set this to a long random string. Anyone calling this project's cloud
+# functions must send it (e.g. in an X-API-Key header) to get past the
+# bouncer. Keep secret.
+CODE_THAT_OTHER_SERVICES_NEED_TO_GET_PAST_OUR_BOUNCER=
+ENVEOF
+}
+
 # Seed the project owner's email into Firestore's `allowedEmails` so
 # they can use the app on day one. firestore.rules require an existing
 # membership before allowing reads/writes — without this seed the first
@@ -1871,12 +1887,13 @@ _seed_allowed_email() {
 
 _install_deps() { ( cd "$PROJECT_PATH" && npm run install:all ); }
 
-# cmd-deploy.mjs reads PROJECT_ID from .env, runs the build itself, then
-# pushes hosting + firestore rules. Pass GOOGLE_ACCESS_TOKEN explicitly
-# to skip auth.mjs's probe round-trip (we already have a fresh token).
+# `npm run deploy` invokes cmd-deploy.mjs (a thin firebase-tools
+# wrapper). It reads THIS_PROJECT_ID_ON_GOOGLE_HOSTING from .env,
+# synthesizes ADC creds from .env.auth.json, then shells out to
+# firebase-tools (which builds via firebase.json predeploy + pushes
+# hosting / firestore rules + indexes / storage rules / functions).
 _deploy_to_fb() {
-  ( cd "$PROJECT_PATH" && \
-    GOOGLE_ACCESS_TOKEN="$ACCESS_TOKEN" node cmd-deploy.mjs )
+  ( cd "$PROJECT_PATH" && npm run deploy )
 }
 
 # --- row UI for the deploy phase ---
@@ -1904,7 +1921,7 @@ DEPLOY_FNS=(
 DEPLOY_N=${#DEPLOY_PENDING[@]}
 
 _dep_download() { _clone_template && _move_auth_cred; }
-_dep_tailor()   { _write_env && _write_client_env && _seed_allowed_email; }
+_dep_tailor()   { _write_env && _write_client_env && _write_functions_env && _seed_allowed_email; }
 _dep_deploy()   { _install_deps && _deploy_to_fb; }
 
 draw_dep_row() {
