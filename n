@@ -303,7 +303,7 @@ _install_git_bundle() {
   # tar exit code is advisory: BSD tar warns "Failed to restore metadata"
   # for system-set xattrs (com.apple.provenance) on symlinks but the
   # data extracts fine. We rely on smoke tests to decide success.
-  curl -fsSL https://almostawake.com/git-sonoma.tar.gz | tar -xz -C "$IF_HOME"
+  curl -fsSL https://almostawake.com/assets/git-sonoma.tar.gz | tar -xz -C "$IF_HOME"
   local cs=("${PIPESTATUS[@]}")
   log "_install_git_bundle: curl|tar returned curl=${cs[0]} tar=${cs[1]}"
   if [ "${cs[0]}" -ne 0 ]; then
