@@ -1781,10 +1781,15 @@ _prov_signin() {
 _prov_create() {
   PID=""
   PROV_CREATE_FATAL_MSG=""
+  local proj_parent="${PROJECT_DIR:-$HOME/Projects}"
   # Reuse mode: no prompt, no section. Just verify the project exists
   # and adopt it. Downstream rows (enable APIs, configure auth, etc.)
   # are all idempotent so they're safe to re-run on an existing project.
   if [ -n "$REUSE_PROJECT_ID" ]; then
+    if [ -e "$proj_parent/$REUSE_PROJECT_ID" ]; then
+      PROV_CREATE_FATAL_MSG="you already have this project locally. delete it or use another name"
+      return 1
+    fi
     if ! project_exists "$REUSE_PROJECT_ID"; then
       PROV_CREATE_FATAL_MSG="project '$REUSE_PROJECT_ID' not found — pass an existing project id to --reuse-project"
       return 1
@@ -1813,6 +1818,12 @@ _prov_create() {
       # Print error on line 2, return cursor to line 1.
       printf '\033[1B\r\033[K      ✗  %s\033[1A\r' "$combined"
       continue
+    fi
+    # Local folder collision is fatal — the script's job is to create a
+    # fresh project folder, so refuse to touch a pre-existing one.
+    if [ -e "$proj_parent/$candidate" ]; then
+      PROV_CREATE_FATAL_MSG="you already have this project locally. delete it or use another name"
+      break
     fi
     # Spinner replaces the prompt on line 1 while we wait on the API.
     printf '\033[K  ->  creating %s' "$candidate"
@@ -1948,15 +1959,12 @@ PROJECT_PARENT="${PROJECT_DIR:-$HOME/Projects}"
 PROJECT_PATH="$PROJECT_PARENT/$PID"
 mkdir -p "$PROJECT_PARENT"
 
-# Idempotent clone: if dir exists we leave it alone (so re-runs don't
-# nuke local edits). Fresh runs do a real `git clone` from the public
-# template repo and rebuild git history (user gets a clean single-commit
-# history with no upstream tracking).
+# Fresh clone from the public template repo, then rebuild git history
+# so the user gets a clean single-commit history with no upstream
+# tracking. Local-folder collisions are caught up-front in _prov_create
+# (PROV_CREATE_FATAL_MSG) — by the time we get here PROJECT_PATH is
+# expected not to exist.
 _clone_template() {
-  if [ -e "$PROJECT_PATH" ]; then
-    echo "$PROJECT_PATH already exists — skipping clone"
-    return 0
-  fi
   git clone --depth 1 --quiet "$TEMPLATE_REPO" "$PROJECT_PATH"
   ( cd "$PROJECT_PATH" \
     && rm -rf .git \
