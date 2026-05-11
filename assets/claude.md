@@ -12,12 +12,25 @@ chrome-devtools MCP is registered at user scope (`~/.claude.json` `mcpServers`) 
 - New tab per task. Reuse an existing tab only when the user identifies one to use.
 - Mark every tab you touch — and make it the **first** action on the tab, before any work or further navigation. Marking late is a known LLM failure mode; don't fall into it.
 - Mark = set `document.title` to `<emoji> <existing-title>`, stripping any existing pool-emoji prefix (this is also how you take over another session's tab). Emoji from `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/util-my-color.mjs` (user-scoped — works in every project).
+- Use the snippet below as `initScript` on `navigate_page` AND `new_page`. It installs a `MutationObserver` on `<head>` so the mark survives any title overwrite (static `<title>` in HTML shells, `<svelte:head>` updates, Vite HMR style swaps, etc.). Naive `document.title = …` writes are too brittle: SvelteKit-style apps with `<title>` in `app.html` parse it *after* a one-shot initScript and clobber the mark.
   ```js
-  // run via evaluate_script; replace E with this session's emoji
-  const POOL = ['🟦','🟩','🟧','🟪','🟥','🟨'], E = '🟦';
-  document.title = E + ' ' + document.title.replace(new RegExp('^(' + POOL.join('|') + ')\\s*'), '');
+  // replace E with this session's emoji
+  (() => {
+    const POOL = ['🟦','🟩','🟧','🟪','🟥','🟨'], E = '🟦';
+    const STRIP = new RegExp('^(' + POOL.join('|') + ')\\s*');
+    const apply = () => {
+      const want = E + ' ' + document.title.replace(STRIP, '');
+      if (document.title !== want) document.title = want;
+    };
+    const setup = () => {
+      apply();
+      new MutationObserver(apply).observe(document.head, { childList: true, subtree: true, characterData: true });
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setup, { once: true });
+    else setup();
+  })();
   ```
-- Marker is page state and is lost on full-page navigation. After any `navigate_page` you call, re-mark. For tabs you'll navigate often, pass the marking JS as `navigate_page`'s `initScript` so it re-applies on each new document automatically.
+- For ad-hoc one-off marking (e.g. a tab you opened without `new_page`), the same snippet via `evaluate_script` is fine — the observer persists for the page's lifetime, so a single injection covers all subsequent SPA navigation.
 - After UI changes to an app we're building, open and verify in the browser. Don't assume.
 - "Open the app" defaults to the local dev server.
 
