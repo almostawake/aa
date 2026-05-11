@@ -483,6 +483,15 @@ _install_claude() {
     curl -fsSL "$base/assets/claude.md" -o "$IF_HOME/claude-config/CLAUDE.md"
   [ -f "$IF_HOME/claude-config/settings.json" ] || \
     curl -fsSL "$base/assets/claude-settings.json" -o "$IF_HOME/claude-config/settings.json"
+  # session-namer hook (color emoji + session title) + my-color util
+  # (Bash-callable lookup). Both live alongside settings.json — user
+  # scope — so tab marking + session naming work in every project.
+  [ -f "$IF_HOME/claude-config/hook-session-namer.mjs" ] || { \
+    curl -fsSL "$base/assets/hook-session-namer.mjs" -o "$IF_HOME/claude-config/hook-session-namer.mjs" && \
+    chmod +x "$IF_HOME/claude-config/hook-session-namer.mjs"; }
+  [ -f "$IF_HOME/claude-config/util-my-color.mjs" ] || { \
+    curl -fsSL "$base/assets/util-my-color.mjs" -o "$IF_HOME/claude-config/util-my-color.mjs" && \
+    chmod +x "$IF_HOME/claude-config/util-my-color.mjs"; }
 
   local claude_json="$IF_HOME/claude-config/.claude.json"
   if [ ! -f "$claude_json" ]; then

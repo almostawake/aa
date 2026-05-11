@@ -11,7 +11,7 @@ chrome-devtools MCP is registered at user scope (`~/.claude.json` `mcpServers`) 
 - New tabs with `background: true`. Never `bringToFront`, never resize. Avoid `lighthouse_audit`, `performance_*`, `emulate`, `resize_page`, `resize_window`.
 - New tab per task. Reuse an existing tab only when the user identifies one to use.
 - Mark every tab you touch — and make it the **first** action on the tab, before any work or further navigation. Marking late is a known LLM failure mode; don't fall into it.
-- Mark = set `document.title` to `<emoji> <existing-title>`, stripping any existing pool-emoji prefix (this is also how you take over another session's tab). Emoji from `.claude/util-my-color.mjs` (project-scoped — only present inside `if`-template clones; skip marking elsewhere).
+- Mark = set `document.title` to `<emoji> <existing-title>`, stripping any existing pool-emoji prefix (this is also how you take over another session's tab). Emoji from `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/util-my-color.mjs` (user-scoped — works in every project).
   ```js
   // run via evaluate_script; replace E with this session's emoji
   const POOL = ['🟦','🟩','🟧','🟪','🟥','🟨'], E = '🟦';

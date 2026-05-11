@@ -10,5 +10,18 @@
   "voiceEnabled": true,
   "defaultMode": "bypassPermissions",
   "autoInstallIdeExtension": false,
-  "awaySummaryEnabled": false
+  "awaySummaryEnabled": false,
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hook-session-namer.mjs\""
+          }
+        ]
+      }
+    ]
+  }
 }
