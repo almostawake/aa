@@ -705,6 +705,7 @@ INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('welcomeOnboarding.state',
 INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('chat.setupContext', '{"installed":true,"disabled":true,"disabledInWorkspace":false}');
 INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('chat.setupContext.migrated.v1', 'true');
 INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('builtinChatExtensionEnablementMigration', 'true');
+INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('workbench.auxiliaryBar.empty', 'true');
 STATESEED
   fi
 
