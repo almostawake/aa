@@ -995,6 +995,8 @@ _write_zshrc() {
     # Where new projects created by `n` go. Override per machine
     # (e.g. ~/_code) by editing the line in ~/.zshrc after install.
     printf 'export PROJECT_DIR="$HOME/Projects"\n'
+    # Prompt: [user] cwd > — short, no hostname, leaves room on narrow terms.
+    printf '%s\n' "PROMPT='[%n] %~ > '"
     printf "alias cc='claude --dangerously-skip-permissions'\n"
     printf "alias ccc='claude --dangerously-skip-permissions --continue'\n"
     printf "alias ccr='claude --dangerously-skip-permissions --resume'\n"
