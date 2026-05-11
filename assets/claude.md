@@ -8,6 +8,7 @@ Applies to any md Claude is expected to read (this file, package `CLAUDE.md`, ag
 ## Browser
 chrome-devtools MCP is registered at user scope (`~/.claude.json` `mcpServers`) — available in every project, no per-project approval prompt.
 - Default to chrome-devtools MCP. Use it for any UI verification or page-driving task.
+- Starting Chrome (only if MCP says it isn't running): `open -a "Chrome with Claude Code"` — the launcher in `~/Applications/` (installed by `aa/n`) handles port 9222 and the `Chrome-Claude` profile. Never spawn `Google Chrome` by direct path with `--remote-debugging-port` or `--user-data-dir=/tmp/...`; that orphan profile loses signed-in state and MCP can't reuse it.
 - New tabs with `background: true`. Never `bringToFront`, never resize. Avoid `lighthouse_audit`, `performance_*`, `emulate`, `resize_page`, `resize_window`.
 - New tab per task. Reuse an existing tab only when the user identifies one to use.
 - Mark every tab you touch — and make it the **first** action on the tab, before any work or further navigation. Marking late is a known LLM failure mode; don't fall into it.
