@@ -17,15 +17,15 @@
 #    2. LOGGING + EXIT TRAP
 #    3. OS / ARCH DETECTION
 #    4. DETECT WHAT'S INSTALLED
-#    5. WELCOME BANNER + OPT-IN
-#    6. INSTALL HELPERS (git, gh, node, java, claude, chrome, vscode)
+#    5. WARNING + OPT-IN
+#    6. INSTALL HELPERS
 #    7. CONFIGURE HELPERS (terminal, workspace, dock)
 #    8. ZSHRC MARKER BLOCK
 #    9. ROW UI + INSTALL/CONFIGURE ORCHESTRATOR
-#   10. SIGN IN (via template stage + cmd-auth.mjs)
+#   10. SETTING UP NEW PROJECT (intro + auth happens in row UI below)
 #   11. GCP/FIREBASE REST PLUMBING
-#   12. PROJECT CHOOSER + PROVISIONING ROWS
-#   13. CLONE TEMPLATE + ENV + SEED + DEPLOY
+#   12. PROVISIONING ROW UI (single list: sign-in → create → APIs)
+#   13. DEPLOYING (clone + tailor + deploy via row UI)
 #   14. PROJECT READY
 
 set -e
@@ -157,10 +157,12 @@ if [ "$OS" = "darwin" ]; then
   esac
 fi
 
-# Keep ~/ clean: route npm cache + Claude state under ~/.if/.
-mkdir -p "$IF_HOME/npm-cache" "$IF_HOME/claude-config"
+# Route npm cache under ~/.if/. Claude Code state lives at its default
+# location (~/.claude/ + ~/.claude.json) — the CLAUDE_CONFIG_DIR redirect
+# proved fragile (env var didn't always reach Claude's process; first-
+# launch sessions sometimes saw empty config), so we stick to defaults.
+mkdir -p "$IF_HOME/npm-cache"
 export NPM_CONFIG_CACHE="$IF_HOME/npm-cache"
-export CLAUDE_CONFIG_DIR="$IF_HOME/claude-config"
 
 # =====================================================================
 # 4. DETECT WHAT'S INSTALLED
@@ -440,14 +442,14 @@ _install_java() {
   export PATH="$JAVA_HOME/bin:$PATH"
 }
 
-# Merge a "trust this directory" entry into ~/.if/claude-config/.claude.json.
+# Merge a "trust this directory" entry into ~/.claude.json.
 # Idempotent — running twice is a no-op. Preserves the rest of the file
 # (numStartups, tipsHistory, all the other onboarding state Claude Code
 # reads/writes constantly). Used at install time for the workspace +
 # parent-projects dir, and at project-create time for each new project.
 _trust_path() {
   local trust_path="$1"
-  local cred="$IF_HOME/claude-config/.claude.json"
+  local cred="$HOME/.claude.json"
   [ -f "$cred" ] || printf '{}\n' > "$cred"
   local tmp; tmp=$(mktemp)
   PATH_TO_TRUST="$trust_path" perl -MJSON::PP -e '
@@ -468,32 +470,28 @@ _install_claude() {
   export PATH="$IF_HOME/claude/bin:$PATH"
   npm install --prefix "$IF_HOME/claude" -g @anthropic-ai/claude-code
 
-  mkdir -p "$IF_HOME/claude-config"
-  # Seed config files from the bundled assets curl'd from our website.
-  # Fetched on demand (rather than baked into this script) so we can
-  # update them without bumping n.
-  #
-  # Layout under CLAUDE_CONFIG_DIR — files sit DIRECTLY in the dir,
-  # NOT in a `.claude/` subdir. Verified the hard way: when settings
-  # were at `<dir>/.claude/settings.json`, Claude Code silently
-  # ignored them (autoInstallIdeExtension, defaultMode, statusline,
-  # all of it). The dir IS the equivalent of `~/.claude/` itself.
+  # Seed config files into Claude Code's default location (~/.claude/
+  # for CLAUDE.md / settings.json / hooks / utils; ~/.claude.json at
+  # home root for onboarding state + MCP server registration). Fetched
+  # on demand (rather than baked into this script) so we can update
+  # the assets without bumping n.
+  mkdir -p "$HOME/.claude"
   local base="https://almostawake.com"
-  [ -f "$IF_HOME/claude-config/CLAUDE.md" ] || \
-    curl -fsSL "$base/assets/claude.md" -o "$IF_HOME/claude-config/CLAUDE.md"
-  [ -f "$IF_HOME/claude-config/settings.json" ] || \
-    curl -fsSL "$base/assets/claude-settings.json" -o "$IF_HOME/claude-config/settings.json"
+  [ -f "$HOME/.claude/CLAUDE.md" ] || \
+    curl -fsSL "$base/assets/claude.md" -o "$HOME/.claude/CLAUDE.md"
+  [ -f "$HOME/.claude/settings.json" ] || \
+    curl -fsSL "$base/assets/claude-settings.json" -o "$HOME/.claude/settings.json"
   # session-namer hook (color emoji + session title) + my-color util
   # (Bash-callable lookup). Both live alongside settings.json — user
   # scope — so tab marking + session naming work in every project.
-  [ -f "$IF_HOME/claude-config/hook-session-namer.mjs" ] || { \
-    curl -fsSL "$base/assets/hook-session-namer.mjs" -o "$IF_HOME/claude-config/hook-session-namer.mjs" && \
-    chmod +x "$IF_HOME/claude-config/hook-session-namer.mjs"; }
-  [ -f "$IF_HOME/claude-config/util-my-color.mjs" ] || { \
-    curl -fsSL "$base/assets/util-my-color.mjs" -o "$IF_HOME/claude-config/util-my-color.mjs" && \
-    chmod +x "$IF_HOME/claude-config/util-my-color.mjs"; }
+  [ -f "$HOME/.claude/hook-session-namer.mjs" ] || { \
+    curl -fsSL "$base/assets/hook-session-namer.mjs" -o "$HOME/.claude/hook-session-namer.mjs" && \
+    chmod +x "$HOME/.claude/hook-session-namer.mjs"; }
+  [ -f "$HOME/.claude/util-my-color.mjs" ] || { \
+    curl -fsSL "$base/assets/util-my-color.mjs" -o "$HOME/.claude/util-my-color.mjs" && \
+    chmod +x "$HOME/.claude/util-my-color.mjs"; }
 
-  local claude_json="$IF_HOME/claude-config/.claude.json"
+  local claude_json="$HOME/.claude.json"
   if [ ! -f "$claude_json" ]; then
     curl -fsSL "$base/assets/claude.json" -o "$claude_json"
     if [ "$OS" = "darwin" ]; then
@@ -994,7 +992,6 @@ _write_zshrc() {
     printf 'export JAVA_HOME="%s"\n' "$jh_value"
     printf 'export PATH="$JAVA_HOME/bin:$PATH"\n'
     printf 'export NPM_CONFIG_CACHE="$HOME/.if/npm-cache"\n'
-    printf 'export CLAUDE_CONFIG_DIR="$HOME/.if/claude-config"\n'
     # Where new projects created by `n` go. Override per machine
     # (e.g. ~/_code) by editing the line in ~/.zshrc after install.
     printf 'export PROJECT_DIR="$HOME/Projects"\n'
