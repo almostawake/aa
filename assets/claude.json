@@ -1,19 +1,11 @@
 {
-  "mcpServers": {
-    "chrome-devtools": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "chrome-devtools-mcp@latest",
-        "--browser-url=http://127.0.0.1:9222"
-      ]
-    }
-  },
   "hasCompletedOnboarding": true,
   "hasCompletedClaudeInChromeOnboarding": true,
   "hasSeenTasksHint": true,
   "hasVisitedPasses": true,
-  "hasIdeOnboardingBeenShown": { "vscode": true },
+  "hasIdeOnboardingBeenShown": {
+    "vscode": true
+  },
   "effortCalloutV2Dismissed": true,
   "appleTerminalSetupInProgress": false,
   "optionAsMetaKeyInstalled": true,
