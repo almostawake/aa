@@ -26,6 +26,27 @@ curl -fsSL https://almostawake.com/n | bash
 Once installed, the script writes an `alias n='curl -fsSL https://almostawake.com/n | bash'`
 to `~/.zshrc`, so the user can just type `n` for subsequent projects.
 
+## Flags
+
+Both optional. Skip with no flags for the normal interactive flow.
+
+- `--reuse-project <id>` — skip the project chooser and use the named
+  (already-existing) GCP project. Fatal at the create-project row if
+  the project doesn't exist or isn't accessible to the signed-in
+  account. Provisioning steps short-circuit on detection (see Re-run
+  safety), so re-running on a fully-provisioned project is safe.
+- `--auth <path>` — skip the OAuth browser flow and reuse an existing
+  `.env.auth.json`. Dropped at `~/.if/.env.auth.json`; `cmd-auth.mjs`
+  re-prompts if the cred is invalid/expired.
+
+When piping (`curl ... | bash`), pass flags via `bash -s --`:
+
+```
+curl -fsSL https://almostawake.com/n | bash -s -- --reuse-project my-existing-id
+```
+
+The installed `n` alias passes flags through directly: `n --reuse-project my-existing-id`.
+
 ## When to invoke
 
 User wants a new automation project on the if stack — typically phrased
