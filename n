@@ -43,7 +43,7 @@ IF_HOME="$HOME/.if"
 INSTALL_LOG="/tmp/if-install.log"
 HTTP_LOG="${HTTP_LOG:-/tmp/if-new.log}"
 TEMPLATE_REPO="https://github.com/almostawake/if.git"
-NODE_VERSION="22.11.0"
+NODE_MAJOR="22"
 JAVA_VERSION="21"
 MARKER_START="# >>> if install >>>"
 MARKER_END="# <<< if install <<<"
@@ -407,14 +407,19 @@ _install_gh() {
 
 _install_node() {
   mkdir -p "$IF_HOME/node"
-  local plat ext url
+  local plat ext ver url
   case "$OS-$ARCH" in
     darwin-arm64) plat="darwin-arm64"; ext="tar.gz" ;;
     darwin-x64)   plat="darwin-x64";   ext="tar.gz" ;;
     linux-x64)    plat="linux-x64";    ext="tar.xz" ;;
     *) die "unsupported platform for Node: $OS-$ARCH" ;;
   esac
-  url="https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-$plat.$ext"
+  # Resolve the current latest v$NODE_MAJOR.x release from nodejs.org.
+  ver=$(curl -fsSL "https://nodejs.org/dist/latest-v$NODE_MAJOR.x/SHASUMS256.txt" \
+    | sed -nE "s/.*node-v([0-9.]+)-${plat}\\.${ext}\$/\\1/p" | head -1)
+  [ -n "$ver" ] || die "could not resolve latest Node $NODE_MAJOR.x for $plat.$ext"
+  log "_install_node: latest v$NODE_MAJOR.x is v$ver"
+  url="https://nodejs.org/dist/v$ver/node-v$ver-$plat.$ext"
   if [ "$ext" = "tar.xz" ]; then
     curl -fsSL "$url" | tar -xJ -C "$IF_HOME/node" --strip-components=1
   else
