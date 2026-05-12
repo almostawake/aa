@@ -19,10 +19,12 @@
 # Idempotent merge (preserves the rest of the file):
 #   ~/.claude.json — trust entry for PROJECT_DIR
 #
-# Only seeds if missing (VS Code may have the DB open):
-#   ~/Library/Application Support/Code/User/globalStorage/state.vscdb
-#   ~/.claude.json (full bootstrap — overwriting clobbers numStartups,
-#     theme, tipsHistory and the rest of Claude's accumulated state)
+# Only seeds if missing (overwriting full bootstrap clobbers numStartups,
+# theme, tipsHistory and the rest of Claude's accumulated state):
+#   ~/.claude.json
+#
+# Clobbers ~/Library/Application Support/Code/User/globalStorage/state.vscdb
+# unconditionally — quit VS Code first or it'll fight us for the lock.
 #
 # Run from anywhere:
 #   curl -fsSL https://almostawake.com/update | bash
@@ -88,15 +90,16 @@ curl -fsSL "$BASE/assets/vscode-settings.json" -o "$code_user/settings.json"
 say "→ Code/User/keybindings.json"
 curl -fsSL "$BASE/assets/vscode-keybindings.json" -o "$code_user/keybindings.json"
 
-# === state.vscdb welcome-modal seed (only if missing) ===
-# VS Code locks the DB while running and the user's accumulated workspace
-# state lives here — never overwrite a populated DB.
+# === state.vscdb welcome-modal seed ===
+# Quit VS Code before running — it locks the DB while open. Wipe and
+# rewrite (UPSERTs are fine but this is the same shape `n` seeds with).
 code_global="$code_user/globalStorage"
 mkdir -p "$code_global"
 state_db="$code_global/state.vscdb"
-if [ ! -f "$state_db" ] && command -v sqlite3 >/dev/null 2>&1; then
+if command -v sqlite3 >/dev/null 2>&1; then
   say "→ state.vscdb (welcome-modal seed)"
-  sqlite3 "$state_db" <<'STATESEED' || true
+  rm -f "$state_db"
+  sqlite3 "$state_db" <<'STATESEED'
 CREATE TABLE IF NOT EXISTS ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);
 INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('welcomeOnboarding.state', 'true');
 INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('chat.setupContext', '{"installed":true,"disabled":true,"disabledInWorkspace":false}');
