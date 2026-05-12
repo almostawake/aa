@@ -6,11 +6,16 @@
     "type": "command",
     "command": "input=$(cat); remaining=$(echo \"$input\" | jq -r '.context_window.remaining_percentage // empty'); [ -n \"$remaining\" ] && printf \"ctx: %.0f%% remaining\" \"$remaining\""
   },
+  "awaySummaryEnabled": false,
+  "voice": {
+    "enabled": true,
+    "mode": "hold"
+  },
   "skipDangerousModePermissionPrompt": true,
   "voiceEnabled": true,
   "defaultMode": "bypassPermissions",
   "autoInstallIdeExtension": false,
-  "awaySummaryEnabled": false,
+  "agentPushNotifEnabled": true,
   "hooks": {
     "UserPromptSubmit": [
       {
