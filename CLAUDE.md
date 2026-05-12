@@ -19,18 +19,23 @@ The bash's job: ensure Chrome runs with `--remote-debugging-port=9222 --user-dat
 
 ### The one rule
 
-**`if/cmd-auth.mjs` invokes the bash launcher via direct `spawn(execPath, [url])` — never via `open -a APP URL`.** The bash receives the URL as `$1`, forwards via `"$@"` to Chrome's command line, Chrome's process-singleton (keyed by `--user-data-dir`) routes it into the Chrome-Claude profile. End of story.
+**`if/cmd-auth.mjs` calls `open -a APP --args URL`. The `--args` flag is load-bearing.**
 
 ```js
 // cmd-auth.mjs (correct shape)
-const launcherExec = path.join(
+const launcherApp = path.join(
   process.env.HOME || '',
-  'Applications/Chrome with Claude Code.app/Contents/MacOS/Chrome with Claude Code'
+  'Applications/Chrome with Claude Code.app'
 );
-spawn(launcherExec, [url], { detached: true, stdio: 'ignore' }).unref();
+spawn('open', ['-a', launcherApp, '--args', url], { detached: true, stdio: 'ignore' }).unref();
 ```
 
-That's all there is. Skip the rest of this file unless you're tempted to change something.
+Two things must hold at once:
+
+1. **URL must reach the bash via argv.** `--args` does this. Without `--args`, `open -a APP URL` drops the URL on the floor (argc=0 inside the bash) and macOS quietly delivers it to the default URL handler instead — Safari on a fresh macOS user.
+2. **Launch must go through LaunchServices.** `open -a` does this. Direct exec of the bash (`spawn(execPath, [url])`) also routes the URL correctly but loses LaunchServices' bundle-id stamp, so the Dock shows two icons (pinned launcher idle + a separate "Google Chrome" running) instead of one merged "Chrome with Claude Code" entry.
+
+`open -a APP --args URL` is the only invocation that gives both. Skip the rest of this file unless you're tempted to change something.
 
 ---
 
@@ -38,66 +43,64 @@ That's all there is. Skip the rest of this file unless you're tempted to change 
 
 Pinning this here because we burned a multi-hour session re-deriving it. The launcher and `cmd-auth.mjs` have a history of "this looks wrong, let me improve it" changes that all turn out to break the working setup. Each of these is documented with what we tried and why it fails.
 
-### Failed approach 1 — `open -a APP URL` from cmd-auth.mjs
+### Failed approach 1 — `open -a APP URL` (no `--args`)
 
-Introduced in `if`'s commit `d425944` on 2026-05-07. Reverted on 2026-05-12.
+`if` commit `d425944` (2026-05-07). The intent was right ("route the URL to a specific bundle") but the form is wrong. `open -a BUNDLE URL` on a bash-in-bundle that doesn't declare `CFBundleURLTypes` does **not** pass URL via argv. Probe inside the bash and `argc=0`. macOS LaunchServices does two things in parallel instead:
 
-The commit message claimed direct exec sometimes routed URLs to the user's regular Chrome via process-singleton hijack, and `open -a` was the "macOS-blessed" path. That premise was wrong on every line.
-
-Empirically: `open -a BUNDLE URL` on a bash-in-bundle that doesn't declare `CFBundleURLTypes` does **not** pass URL via argv. Probe inside the bash with the invocation and `argc=0`. macOS LaunchServices does two things in parallel instead:
-
-1. Launches the bundle (bash starts with empty argv, runs its kill-Chrome + spawn dance, ends up with `"$@"` empty so Chrome opens with no URL).
+1. Launches the bundle (bash starts with empty argv, runs its kill-Chrome + spawn dance, `"$@"` is empty so Chrome opens with no URL).
 2. Falls through to the **default URL handler** for the scheme and delivers the URL there via `kAEGetURL` Apple Event.
 
-On a Mac where Chrome is already the default browser (because the user set it, ages ago), step 2 sends the URL to Chrome, Chrome's `--user-data-dir` singleton routes it to the running Chrome-Claude instance the launcher just brought up, and it all works by accident — *not* through the path the bash launcher was designed for.
+On a Mac where Chrome is already the default browser, step 2 sends the URL to Chrome, Chrome's `--user-data-dir` singleton routes it to the Chrome-Claude instance the launcher just brought up, and it all works *by accident* — not through the path the bash was designed for.
 
-**On a fresh macOS user, the default browser is Safari.** Step 2 sends the OAuth URL to Safari. The launcher's bash also opens Chrome-Claude blank. You see Safari with the OAuth page and a blank Chrome window — the user-visible bug we chased through this whole session.
+**On a fresh macOS user, the default browser is Safari.** Step 2 sends the OAuth URL to Safari. The launcher's bash also opens Chrome-Claude blank. You see Safari with the OAuth page and a blank Chrome window — the user-visible bug.
 
-Tested directly: `open ~/Applications/Chrome\ with\ Claude\ Code.app https://news.ycombinator.com` on the fresh-VM user opened Safari with HN and Chrome with a blank tab. Two windows, two apps, neither what we want.
+Tested directly on the fresh-VM user: `open ~/Applications/Chrome\ with\ Claude\ Code.app https://news.ycombinator.com` opened Safari with HN and Chrome with a blank tab.
 
-The fix: **don't go through `open` at all.** Direct `spawn(execPath, [url])` from cmd-auth.mjs hands the URL to the bash as argv. Bash forwards via `"$@"`. Chrome opens the URL in Chrome-Claude. Works on every macOS user regardless of default-browser setting.
+The fix: add `--args` (see "The one rule" above).
 
-### Failed approach 2 — rebuild the launcher as an `osacompile` applet
+### Failed approach 2 — direct exec, no `open` at all
 
-Tried in `aa` commit `ff66210` on 2026-05-12. Reverted in `52befae` same day.
+`if` commit `5248ca3` (2026-05-12). `spawn(execPath, [url])` straight from Node, no LaunchServices in the picture.
 
-The premise was that the bash-in-bundle was dropping URLs and an `on open location` AppleScript applet was needed to receive them properly via Apple Events. That premise was wrong. The bash-in-bundle never *needed* to receive URLs by Apple Event — it receives them via argv (when direct-exec'd). The applet adds an AppleScript layer and a separate helper script to solve a problem that doesn't exist.
+URL routing works perfectly — the bash gets URL as `$1`, forwards to Chrome. No fall-through, no Safari, no race.
 
-The applet also strictly *worsens* one thing: AppleScript's `do shell script` runs a fresh shell whose env you don't fully control, which complicates the process-group attribution the Dock uses (see below).
+But: because we never went through `open -a`, LaunchServices never stamps the launcher's bundle id on the bash's process context. Chrome inherits an unstamped PGID. The Dock has nothing to attribute the running Chrome to except `com.google.Chrome` directly, so you get two icons in the Dock — pinned "Chrome with Claude Code" (idle) and "Google Chrome" (running). Cosmetic, not functional.
 
-### Failed approach 3 — pre-warm Chrome-Claude in `_prov_signin` before cmd-auth.mjs
+`open -a APP --args URL` fixes the cosmetic by re-introducing LaunchServices to the launch, without re-introducing the URL-drop bug (because `--args` forces argv passing).
 
-I proposed this when the cold-start race looked like the culprit. It isn't — the cold-start race is real but irrelevant once cmd-auth.mjs direct-execs. Pre-warming would also fail to fix the default-browser-is-Safari case because the URL still goes via fall-through. **Don't add a pre-warm step.**
+### Failed approach 3 — rebuild the launcher as an `osacompile` applet
 
-### Failed approach 4 — `open -a APP --args URL`
+`aa` commit `ff66210` (reverted in `52befae`). Premise was the bash couldn't receive URLs, so an `on open location` AppleScript applet was needed. That premise was wrong — the bash *can* receive URLs, just not via `open -a` without `--args`. Don't rebuild as an applet. Adds layers, solves nothing.
 
-Looks like the right "have your cake and eat it too": LaunchServices launches the bundle (preserving Dock attribution) and `--args` passes the URL via argv. Untested in detail, possibly works. Not adopted because the simpler direct-exec is good enough and doesn't need `open` at all.
+### Failed approach 4 — pre-warm Chrome-Claude in `_prov_signin`
 
-If you go down this path, note: `open -a` rejects relative paths to bundles ("Unable to find application named '…'"). Pass the absolute path.
+Proposed when the cold-start race looked like the culprit. The race exists but is irrelevant once `cmd-auth.mjs` uses `open -a --args` (URL goes to argv, doesn't depend on what's running). Don't add a pre-warm step.
 
 ### Failed approach 5 — declare `CFBundleURLTypes` on the launcher bundle
 
-Would hijack URLs into the bash via Apple Event `kAEGetURL` — which a bash script can't receive (it's not an Apple-Event-aware app). URLs get dropped entirely. Strictly worse than today's setup. Don't.
+Would hijack URLs into the bash via Apple Event `kAEGetURL` — which a bash script can't receive (it's not an Apple-Event-aware app). URLs get dropped entirely. Strictly worse. Don't.
 
 ### Failed approach 6 — `lsregister -f` after building the launcher
 
-Looked plausible as a "force LaunchServices to index the new bundle". Doesn't help because direct exec doesn't use LaunchServices. Harmless if added, but not necessary.
+Looked plausible as a "force LaunchServices to index the new bundle". Doesn't help; `open -a` works on freshly-built bundles by absolute path regardless. Harmless if added, but not necessary.
+
+### Path gotcha
+
+`open -a` rejects relative paths to bundles ("Unable to find application named '…'") because LaunchServices treats the argument as either a registered app *name* or an *absolute* path, never a relative file path — even if the file exists relative to cwd. Pass `path.join(process.env.HOME, 'Applications/Chrome with Claude Code.app')` (absolute) from JS. From the shell, write `~/Applications/…` so zsh expands it before `open` sees it.
 
 ---
 
 ## What's actually happening (mechanism reference)
 
-After cmd-auth.mjs direct-execs the bash launcher with URL as argv:
+After `cmd-auth.mjs` runs `open -a launcherApp --args url`:
 
-1. **Bash invoked**: PID assigned, `argv = ["…/Chrome with Claude Code", "https://accounts.google.com/o/oauth2/…"]`. Runs in its own process group (PGID = bash's PID).
+1. **LaunchServices launches the bundle** with the launcher's `CFBundleIdentifier` in the new process's env. Bash starts as the bundle's `Contents/MacOS/` executable. Because `--args` was used, URL is in argv: `$1 = "https://accounts.google.com/o/oauth2/…"`. Runs in its own process group (PGID = bash's PID).
 2. **Bash quits any existing Chrome** (`osascript -e 'tell application "Google Chrome" to quit'`, then poll-and-killall if needed). Idempotent — no-op if Chrome wasn't running.
 3. **Bash spawns Chrome** with `--remote-debugging-port=9222 --silent-debugger-extension-api --no-first-run --user-data-dir="$HOME/Library/Application Support/Google/Chrome-Claude" "$@"`. The `&` backgrounds it; the `"$@"` expansion passes the URL through as Chrome's argv.
-4. **Chrome opens URL** in the Chrome-Claude profile. Inherits bash's PGID.
+4. **Chrome opens URL** in the Chrome-Claude profile. Inherits bash's PGID and the launcher's bundle stamp.
 5. **Bash polls** `http://localhost:9222/json/version` until Chrome's debug port is up (≤ 10 s).
 6. **Bash writes `DevToolsActivePort`** to `$HOME/Library/Application Support/Google/Chrome/` so chrome-devtools MCP discovers the port.
-7. **Bash exits**. Chrome continues. Chrome's PPID gets reparented to launchd (init), but PGID stays as the bash's old PID.
-
-The Dock attribution to "Chrome with Claude Code" — macOS Dock walks PGID, finds the (now-exited) bash launcher PID, looks up the bundle. With direct exec (no LaunchServices), this attribution may not always be preserved; you may see Chrome as its own Dock entry alongside the pinned launcher. That's cosmetic. The OAuth flow works either way.
+7. **Bash exits**. Chrome continues. PPID reparents to launchd (init), but PGID stays as the bash's old PID — that's how the Dock keeps attributing the running Chrome to the launcher bundle and shows the single "Chrome with Claude Code" icon.
 
 ### Verification — run these on the VM to confirm the launcher works
 
@@ -106,25 +109,28 @@ The Dock attribution to "Chrome with Claude Code" — macOS Dock walks PGID, fin
 osascript -e 'tell application "Google Chrome" to quit' 2>/dev/null
 pkill -9 -f "Google Chrome" 2>/dev/null
 
-# Direct exec — what cmd-auth.mjs now does:
-~/Applications/Chrome\ with\ Claude\ Code.app/Contents/MacOS/Chrome\ with\ Claude\ Code "https://news.ycombinator.com"
+# Same invocation cmd-auth.mjs uses:
+open -a ~/Applications/Chrome\ with\ Claude\ Code.app --args "https://news.ycombinator.com"
 
-# Should open HN in Chrome with --user-data-dir=Chrome-Claude. Verify:
+# Should open HN in Chrome with --user-data-dir=Chrome-Claude, AND show a
+# single Dock icon labeled "Chrome with Claude Code" (not two icons or one
+# labeled "Google Chrome"). Verify the URL landed:
 curl -s http://localhost:9222/json | python3 -c "import sys,json; print('\n'.join(t.get('url','') for t in json.load(sys.stdin)))"
 # Output should include https://news.ycombinator.com/
 ```
 
-If those work, the launcher's contract is intact. If anything else looks "off" (single Dock icon vs two, etc.), it's cosmetic, not a contract violation.
+If both hold, the launcher's contract is intact. If only the URL part holds (one icon → two icons), you're likely on the direct-exec form (`5248ca3`) — switch back to `open -a --args`. If neither holds (no URL in tabs), check whether `open -a` is rejecting the path; the bundle path must be absolute, never relative.
 
 ### What's safe to change
 
-- The bash's body (kill-Chrome dance, polling logic, DevToolsActivePort path) — those are mechanics, not contract. The contract is "executable at `Contents/MacOS/Chrome with Claude Code` accepts a URL as `$1` and ensures Chrome-Claude opens with it".
+- The bash's body (kill-Chrome dance, polling logic, DevToolsActivePort path) — those are mechanics, not contract. The contract is "executable at `Contents/MacOS/Chrome with Claude Code` accepts a URL as `$1` (when invoked via `open -a APP --args URL`) and ensures Chrome-Claude opens with it".
 - `Info.plist` fields that don't introduce URL types — bundle id, name, version, icon.
 - Dock pinning in `_configure_workspace`/`_configure_dock`.
 
 ### What's NOT safe to change
 
-- Switching `if/cmd-auth.mjs` to anything other than direct exec of the bash with URL as argv. We've now learned this twice.
+- The `--args` flag in `if/cmd-auth.mjs`'s `open -a APP --args URL` call. Drop it and you re-introduce the d425944 bug.
+- Replacing `open -a --args` with direct exec — works for URL routing but loses Dock attribution (`5248ca3`).
 - Adding `CFBundleURLTypes` to the launcher bundle.
 - Replacing the bash with an `osacompile` applet.
 - The bash's `"$@"` in the Chrome command line.
