@@ -68,6 +68,13 @@ elif command -v gh >/dev/null 2>&1; then
   have_gh=true
 fi
 
+have_jq=false
+if [ -x "$IF_HOME/jq/bin/jq" ]; then
+  have_jq=true
+elif command -v jq >/dev/null 2>&1; then
+  have_jq=true
+fi
+
 have_node22=false
 node_bin=""
 if   [ -x "$IF_HOME/node/bin/node" ]; then node_bin="$IF_HOME/node/bin/node"
@@ -111,8 +118,8 @@ if [ "$OS" = "darwin" ] && \
   have_vscode=true
 fi
 
-ITEMS=("git" "gh" "node 22" "java 21" "claude code [in YOLO mode]" "chrome [connected to Claude]" "vscode")
-INSTALLED=("$have_git" "$have_gh" "$have_node22" "$have_java21" "$have_claude" "$have_chrome" "$have_vscode")
+ITEMS=("git" "gh" "jq" "node 22" "java 21" "claude code [in YOLO mode]" "chrome [connected to Claude]" "vscode")
+INSTALLED=("$have_git" "$have_gh" "$have_jq" "$have_node22" "$have_java21" "$have_claude" "$have_chrome" "$have_vscode")
 N=${#ITEMS[@]}
 
 N_TODO=0
