@@ -131,12 +131,10 @@ Firestore rules are deployed, the user's email is seeded into
 - `~/.if/template-stage/` — staged clone of the public template repo +
   cached `.env.auth.json`. Reused across runs to avoid re-prompting
   for OAuth consent.
-- `~/Applications/` — Chrome.app, Chrome with Claude Code.app, IF
-  Terminal.app.
+- `~/Applications/` — Chrome.app, Chrome with Claude Code.app, Visual
+  Studio Code.app.
 - `~/Library/Application Support/Google/Chrome-Claude/` — Chrome
   profile for the debug-port-enabled Claude browser.
-- `~/Library/Services/Claude Code at Folder.workflow` — Finder
-  right-click Quick Action.
 - `~/.zshrc` — marker-fenced block (PATH, JAVA_HOME, NPM_CONFIG_CACHE,
   CLAUDE_CONFIG_DIR, PROJECT_DIR=~/Projects, aliases `cc`/`ccc`/`ccr`/`n`).
 - `${PROJECT_DIR:-~/Projects}/<project-id>/` — the user's new project
@@ -169,7 +167,7 @@ are printed to stderr automatically. Read those before suggesting fixes.
 `n` is idempotent at every level:
 - Already-installed tooling: skipped (rendered green from the start).
 - Already-configured workspace: re-applied (overwrites are
-  intentional — restores Dock entries / Quick Actions if removed).
+  intentional — restores Dock entries if removed).
 - Already-existing GCP project: chooser offers reuse; provisioning
   steps short-circuit on detection (Firestore exists → skip create,
   API enabled → skip enable, etc.).

@@ -535,10 +535,9 @@ _install_claude() {
     fi
   fi
 
-  # Pre-trust common cwds so the "Do you trust this folder?" prompt
-  # doesn't fire on first launch from VS Code / IF Terminal / wherever
-  # users typically open Claude.
-  _trust_path "$HOME/if"
+  # Pre-trust PROJECT_DIR so the "Do you trust this folder?" prompt
+  # doesn't fire on first launch from VS Code / wherever users typically
+  # open Claude.
   _trust_path "${PROJECT_DIR:-$HOME/Projects}"
 }
 
@@ -756,22 +755,8 @@ STATESEED
 }
 
 # =====================================================================
-# 7. CONFIGURE HELPERS (terminal, workspace, dock)
+# 7. CONFIGURE HELPERS (workspace, dock)
 # =====================================================================
-
-# Pre-configure Terminal.app so Option-Enter inserts a newline (what
-# "shift-enter" in Claude Code actually needs).
-_configure_terminal() {
-  [ "$OS" = "darwin" ] || return 0
-  local plist="$HOME/Library/Preferences/com.apple.Terminal.plist"
-  [ -f "$plist" ] || return 0
-  [ -f "${plist}.bak" ] || cp "$plist" "${plist}.bak"
-  local profile
-  profile=$(defaults read com.apple.Terminal "Default Window Settings" 2>/dev/null || echo "Basic")
-  plutil -insert  "Window Settings.${profile}.useOptionAsMetaKey" -bool YES "$plist" 2>/dev/null \
-    || plutil -replace "Window Settings.${profile}.useOptionAsMetaKey" -bool YES "$plist" 2>/dev/null \
-    || true
-}
 
 # Dock helper: delete any :persistent-apps entry whose _CFURLString == $1.
 _dock_apps_remove_url() {
@@ -809,72 +794,23 @@ _dock_apps_insert_at_zero() {
   return 0
 }
 
-# Create ~/if workspace, point Finder there, pin to Dock, enable
-# "Claude Code at Folder" + "New Terminal at Folder" Quick Actions.
+# Create PROJECT_DIR workspace, point Finder there, pin VS Code +
+# Chrome-with-Claude to the Dock.
 #
-# Why ~/if and not ~/: running claude in ~ makes it enumerate Documents,
-# Downloads, Photos Library, Reminders, etc., which fires macOS TCC
-# prompts. An empty work dir avoids all of that.
+# PROJECT_DIR (defaults to ~/Projects) is the user's project parent.
+# Running claude in ~ makes it enumerate Documents, Downloads, Photos
+# Library, Reminders, etc., which fires macOS TCC prompts — an empty
+# project parent avoids all of that.
 _configure_workspace() {
   [ "$OS" = "darwin" ] || return 0
-  mkdir -p "$HOME/if"
-
-  # Build IF Terminal.app via osacompile — proper applet bundle whose
-  # executable IS a native Mach-O binary (the system applet runtime).
-  # Why not a shell-script .app: macOS probes Contents/MacOS for a
-  # Mach-O header to decide whether to offer Rosetta; scripts fail that
-  # probe and trigger the Rosetta prompt even with LSRequiresNativeExecution
-  # + arm64-only LSArchitecturePriority. osacompile sidesteps it — the
-  # applet binary is universal. The body uses `do shell script` +
-  # `open -a Terminal.app` (LaunchServices, no Apple Events TCC prompt).
-  local if_term="$HOME/Applications/IF Terminal.app"
-  rm -rf "$if_term"
-  local tmp_scpt; tmp_scpt=$(mktemp).scpt
-  cat > "$tmp_scpt" <<'IFTERMSCPT'
-do shell script "open -a Terminal.app ~/if"
-IFTERMSCPT
-  osacompile -o "$if_term" "$tmp_scpt"
-  rm -f "$tmp_scpt"
-
-  local term_icns=""
-  for candidate in \
-      "/System/Applications/Utilities/Terminal.app/Contents/Resources/Terminal.icns" \
-      "/Applications/Utilities/Terminal.app/Contents/Resources/Terminal.icns" ; do
-    if [ -f "$candidate" ]; then term_icns="$candidate"; break; fi
-  done
-  if [ -z "$term_icns" ]; then
-    local term_app
-    term_app=$(mdfind "kMDItemCFBundleIdentifier == 'com.apple.Terminal'" 2>/dev/null | head -1)
-    [ -n "$term_app" ] && [ -f "$term_app/Contents/Resources/Terminal.icns" ] \
-      && term_icns="$term_app/Contents/Resources/Terminal.icns"
-  fi
-  [ -n "$term_icns" ] && cp "$term_icns" "$if_term/Contents/Resources/applet.icns"
-
-  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.almostawake.if.terminal" \
-    "$if_term/Contents/Info.plist" 2>/dev/null || true
-
-  # Bumping mtime forces LaunchServices/Dock to re-register the icon.
-  touch "$if_term"
-
-  # Install "Claude Code at Folder" Finder Quick Action. The .workflow
-  # bundle was built once in Automator; we unzip it into ~/Library/Services/
-  # and `pbs -update` below makes it show in the Finder right-click menu.
-  mkdir -p "$HOME/Library/Services"
-  rm -rf "$HOME/Library/Services/Claude Code at Folder.workflow"
-  local quick_action_zip
-  quick_action_zip=$(mktemp -u).zip
-  if curl -fsSL https://almostawake.com/assets/quick-action.zip -o "$quick_action_zip" 2>/dev/null; then
-    unzip -q -o "$quick_action_zip" -d "$HOME/Library/Services/" || true
-    rm -rf "$HOME/Library/Services/__MACOSX"
-    rm -f "$quick_action_zip"
-  fi
+  local proj_dir="${PROJECT_DIR:-$HOME/Projects}"
+  mkdir -p "$proj_dir"
 
   # === Pass 1: defaults write (cfprefsd in-memory cache) ===
 
-  # New Finder windows default to ~/if — covers right-click New Folder
-  # + right-click New Terminal at Folder workflow.
+  # New Finder windows default to PROJECT_DIR.
   defaults write com.apple.finder NewWindowTarget -string "PfLo" 2>/dev/null || true
-  defaults write com.apple.finder NewWindowTargetPath -string "file://$HOME/if/" 2>/dev/null || true
+  defaults write com.apple.finder NewWindowTargetPath -string "file://$proj_dir/" 2>/dev/null || true
 
   # Clean Dock: kill the Recents shelf so the right side doesn't fill
   # with whatever they happen to launch.
@@ -925,20 +861,17 @@ IFTERMSCPT
   # Dock left side, immediately right of Finder:
   #   slot 0 — VS Code (pre-configured + auto-runs cc on folderOpen)
   #   slot 1 — Chrome with Claude Code (debug-port-enabled launcher)
-  #   slot 2 — IF Terminal (opens new Terminal in ~/if)
-  # Prepend in reverse order so final L-R is [vscode, chrome, term, ...rest].
-  # Also remove the legacy shell.command URL so upgrading installs
-  # don't leave a stale Dock entry.
+  # Prepend in reverse order so final L-R is [vscode, chrome, ...rest].
+  # Also remove legacy URLs (IF Terminal applet, shell.command) so
+  # upgrading installs don't leave a stale Dock entry.
   local url_vscode="file://$HOME/Applications/Visual%20Studio%20Code.app/"
   local url_chrome="file://$HOME/Applications/Chrome%20with%20Claude%20Code.app/"
-  local url_term="file://$HOME/Applications/IF%20Terminal.app/"
+  local url_term_legacy="file://$HOME/Applications/IF%20Terminal.app/"
   local url_shell_legacy="file://$HOME/.if/bin/shell.command"
   _dock_apps_remove_url "$url_vscode"
   _dock_apps_remove_url "$url_chrome"
-  _dock_apps_remove_url "$url_term"
+  _dock_apps_remove_url "$url_term_legacy"
   _dock_apps_remove_url "$url_shell_legacy"
-  # IF Terminal not pinned — keep the remove-url above so existing
-  # installs lose it on re-run.
   _dock_apps_insert_at_zero "$url_chrome"
   _dock_apps_insert_at_zero "$url_vscode"
 
@@ -946,36 +879,6 @@ IFTERMSCPT
   # from Terminal, making Claude's first-run "Trust this folder" prompt
   # unreachable. Prefs apply to next Cmd-N anyway.
   killall Dock 2>/dev/null || true
-
-  # === Services: register, then force-enable ===
-  /System/Library/CoreServices/pbs -update 2>/dev/null || true
-  sleep 0.5
-
-  # Flush cfprefsd so its cache of pbs.plist is discarded.
-  killall cfprefsd 2>/dev/null || true
-  sleep 0.3
-
-  # Edit pbs.plist directly on disk. The defaults-write route through
-  # cfprefsd silently reverts (cfprefsd cache vs pbs writes fight).
-  # Going straight to disk wins. Schema matches what macOS writes when
-  # the user manually ticks the Quick Actions checkbox.
-  local pbs_plist="$HOME/Library/Preferences/pbs.plist"
-  if [ -f "$pbs_plist" ]; then
-    local key
-    for key in \
-        "com.apple.Terminal - Open Terminal at Folder - openTerminal" \
-        "(null) - Claude Code at Folder - runWorkflowAsService" ; do
-      /usr/libexec/PlistBuddy -c "Delete :NSServicesStatus:'${key}'" "$pbs_plist" 2>/dev/null || true
-      /usr/libexec/PlistBuddy -c "Add :NSServicesStatus:'${key}' dict" "$pbs_plist"
-      /usr/libexec/PlistBuddy -c "Add :NSServicesStatus:'${key}':presentation_modes dict" "$pbs_plist"
-      /usr/libexec/PlistBuddy -c "Add :NSServicesStatus:'${key}':presentation_modes:ContextMenu integer 1" "$pbs_plist"
-      /usr/libexec/PlistBuddy -c "Add :NSServicesStatus:'${key}':presentation_modes:FinderPreview integer 1" "$pbs_plist"
-      /usr/libexec/PlistBuddy -c "Add :NSServicesStatus:'${key}':presentation_modes:ServicesMenu integer 1" "$pbs_plist"
-      /usr/libexec/PlistBuddy -c "Add :NSServicesStatus:'${key}':presentation_modes:TouchBar integer 0" "$pbs_plist"
-    done
-  fi
-
-  killall cfprefsd 2>/dev/null || true
 }
 
 # =====================================================================
@@ -1122,7 +1025,6 @@ export PATH="$IF_HOME/gh/bin:$IF_HOME/jq/bin:$IF_HOME/git/bin:$IF_HOME/node/bin:
 [ -d "$IF_HOME/java/bin" ] && export JAVA_HOME="$IF_HOME/java" && export PATH="$JAVA_HOME/bin:$PATH"
 
 # Silent end-steps (no row, just do the work). Idempotent.
-_configure_terminal  >> "$INSTALL_LOG" 2>&1 || true
 _configure_workspace >> "$INSTALL_LOG" 2>&1 || true
 
 # Always rewrite the marker block — cheap, idempotent, catches users
