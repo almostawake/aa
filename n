@@ -597,54 +597,60 @@ _install_chrome() {
     _log "chrome_app now = $chrome_app"
   fi
 
-  # 2. Build/rebuild the launcher (always, so flag changes take effect on re-runs).
+  # 2. Build/rebuild the launcher (always, so flag/script changes take
+  # effect on re-runs).
+  #
+  # Built as an `osacompile` applet so the executable is a Mach-O binary
+  # (the system applet runtime). Two reasons it has to be an applet, not
+  # a bash-in-bundle:
+  #   1. macOS probes Contents/MacOS for a Mach-O header to decide
+  #      whether to offer Rosetta; a script header fails that probe and
+  #      triggers the prompt even with LSRequiresNativeExecution +
+  #      arm64-only LSArchitecturePriority. osacompile sidesteps it.
+  #   2. `open -a APP URL` delivers URLs to .app bundles via Apple Event
+  #      `kAEGetURL` — AppleScript's `on open location` receives those;
+  #      a bash exec in Contents/MacOS does not. Without this, the URL
+  #      is silently dropped (cmd-auth.mjs's OAuth URL would never reach
+  #      Chrome and the user ended up on a New Tab page in their
+  #      default browser).
+  #
+  # The applet itself just forwards URL/no-URL to a helper bash script
+  # at Contents/Resources/launch.sh; the Chrome-launching logic stays
+  # in shell where it's easier to debug.
   local launcher_app="$HOME/Applications/Chrome with Claude Code.app"
   mkdir -p "$HOME/Applications"
   rm -rf "$launcher_app"
-  mkdir -p "$launcher_app/Contents/MacOS"
-  mkdir -p "$launcher_app/Contents/Resources"
-  cp "$chrome_app/Contents/Resources/app.icns" "$launcher_app/Contents/Resources/app.icns" 2>/dev/null || true
 
-  cat > "$launcher_app/Contents/Info.plist" <<'CHROMEPLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleName</key>
-  <string>Chrome with Claude Code</string>
-  <key>CFBundleDisplayName</key>
-  <string>Chrome with Claude Code</string>
-  <key>CFBundleExecutable</key>
-  <string>Chrome with Claude Code</string>
-  <key>CFBundleIconFile</key>
-  <string>app</string>
-  <key>CFBundleIconName</key>
-  <string>app</string>
-  <key>CFBundleIdentifier</key>
-  <string>com.almostawake.if.chrome-claude-code</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>CFBundleVersion</key>
-  <string>1.0</string>
-  <key>LSMinimumSystemVersion</key>
-  <string>10.15</string>
-  <key>LSRequiresNativeExecution</key>
-  <true/>
-  <key>LSArchitecturePriority</key>
-  <array>
-    <string>arm64</string>
-  </array>
-</dict>
-</plist>
-CHROMEPLIST
+  local tmp_scpt; tmp_scpt=$(mktemp).applescript
+  cat > "$tmp_scpt" <<'APPLET'
+on launchChrome(urlArg)
+	set helper to (POSIX path of (path to me)) & "Contents/Resources/launch.sh"
+	set cmd to quoted form of helper
+	if urlArg is not "" then
+		set cmd to cmd & " " & quoted form of urlArg
+	end if
+	do shell script cmd & " >/dev/null 2>&1 & disown"
+end launchChrome
 
-  cat > "$launcher_app/Contents/MacOS/Chrome with Claude Code" <<CHROMELAUNCH
+on open location theURL
+	launchChrome(theURL)
+end open location
+
+on run
+	launchChrome("")
+end run
+APPLET
+  osacompile -o "$launcher_app" "$tmp_scpt"
+  rm -f "$tmp_scpt"
+
+  # Helper script invoked by the applet with the URL (or empty) as $1.
+  cat > "$launcher_app/Contents/Resources/launch.sh" <<CHROMELAUNCH
 #!/bin/bash
 # No kill-Chrome dance needed: Chrome with a different --user-data-dir
 # coexists fine with the user's regular Chrome. If Chrome-Claude is
-# already running, Chrome's process-singleton sends activation to the
-# existing instance (URL args become tabs there); the new process exits
-# immediately. Debug port stays alive either way.
+# already running, Chrome's process-singleton routes URL args to the
+# existing instance as new tabs; the new process exits immediately.
+# Debug port stays alive either way.
 
 PROFILE="\$HOME/Library/Application Support/Google/Chrome-Claude"
 
@@ -670,7 +676,32 @@ wspath=\$(curl -s http://localhost:9222/json/version | \\
   perl -MJSON::PP -e 'my \$j=decode_json(join("",<STDIN>)); my \$u=\$j->{webSocketDebuggerUrl} // ""; my (\$p) = \$u =~ m{:9222(.*)}; print \$p // ""')
 printf '9222\n'"\${wspath}" > "\$HOME/Library/Application Support/Google/Chrome/DevToolsActivePort"
 CHROMELAUNCH
-  chmod +x "$launcher_app/Contents/MacOS/Chrome with Claude Code"
+  chmod +x "$launcher_app/Contents/Resources/launch.sh"
+
+  # Use Chrome's app icon under osacompile's expected name.
+  cp "$chrome_app/Contents/Resources/app.icns" \
+     "$launcher_app/Contents/Resources/applet.icns" 2>/dev/null || true
+
+  # Patch Info.plist: bundle id + name + http/https URL handling so
+  # LaunchServices routes URLs from `open -a APP URL` to `on open
+  # location` instead of dropping them. osacompile produces a minimal
+  # Info.plist by default; we add what we need with PlistBuddy.
+  local plist="$launcher_app/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.almostawake.if.chrome-claude-code" "$plist" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string com.almostawake.if.chrome-claude-code" "$plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleName 'Chrome with Claude Code'" "$plist" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :CFBundleName string 'Chrome with Claude Code'" "$plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName 'Chrome with Claude Code'" "$plist" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string 'Chrome with Claude Code'" "$plist"
+  /usr/libexec/PlistBuddy -c "Delete :CFBundleURLTypes" "$plist" 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes array" "$plist"
+  /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0 dict" "$plist"
+  /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLName string 'Web URL'" "$plist"
+  /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" "$plist"
+  /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string http" "$plist"
+  /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:1 string https" "$plist"
+
+  # Bumping mtime forces LaunchServices/Dock to re-register the bundle.
   touch "$launcher_app"
 }
 
