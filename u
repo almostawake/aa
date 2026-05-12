@@ -7,16 +7,20 @@
 # Removes:
 #   ~/.if/                                           — everything we install
 #                                                      (node, java, claude, git, gh,
-#                                                      npm-cache, claude-config, creds, ...)
+#                                                      npm-cache, creds, ...)
 #   ~/.zshrc                                         — only our marker block (the rest of
 #                                                      the file is left alone), plus any
 #                                                      .zshrc.*.bak we've produced
 #   ~/.gitconfig                                     — git's global config
 #   ~/.npm/                                          — npm cache (created before
 #                                                      NPM_CONFIG_CACHE takes effect)
-#   ~/.claude/                                       — Claude Code data dir (created
-#                                                      before CLAUDE_CONFIG_DIR takes effect)
+#   ~/.claude/                                       — Claude Code data dir (canonical
+#                                                      location: CLAUDE.md, settings,
+#                                                      hooks, projects/, sessions/, ...)
 #   ~/.claude.json                                   — Claude Code top-level config
+#   ~/.claude.json.backup                            — Claude Code's auto-rotated backup
+#   ~/.claude.json.bak.*                             — Claude Code's upgrade backups
+#   ~/Library/Caches/claude-cli-nodejs/              — Claude Code per-project IDE/MCP cache
 #   ~/Applications/Google Chrome.app                 — our user-level Chrome install
 #   ~/Applications/Chrome with Claude Code.app       — our launcher bundle
 #   ~/Applications/Visual Studio Code.app            — our user-level VS Code install
@@ -92,6 +96,8 @@ paths=(
   "$HOME/.npm"
   "$HOME/.claude"
   "$HOME/.claude.json"
+  "$HOME/.claude.json.backup"
+  "$HOME/Library/Caches/claude-cli-nodejs"
   "$HOME/.gitconfig"
   "$HOME/Applications/Google Chrome.app"
   "$HOME/Applications/Chrome with Claude Code.app"
@@ -133,6 +139,13 @@ fi
 
 # Catch any timestamped .zshrc backups the installer left behind
 for bak in "$HOME"/.zshrc.*.bak; do
+  [ -e "$bak" ] || continue
+  rm -f "$bak"
+  say "  removed $bak"
+done
+
+# Catch Claude Code's timestamped .claude.json.bak.* upgrade backups
+for bak in "$HOME"/.claude.json.bak.*; do
   [ -e "$bak" ] || continue
   rm -f "$bak"
   say "  removed $bak"
