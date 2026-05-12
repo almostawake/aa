@@ -1,0 +1,121 @@
+#!/bin/bash
+#
+# update — refresh per-user setup that `n` doesn't re-apply on re-run.
+#
+# `n` fetches asset files only when absent (Claude config, VS Code
+# user settings + keybindings) and seeds state.vscdb only on first
+# install. Run this when we ship updates to those assets so an
+# existing install picks them up without a full re-install.
+#
+# Force-overwrites:
+#   ~/.claude/CLAUDE.md
+#   ~/.claude/settings.json
+#   ~/.claude/hook-session-namer.mjs
+#   ~/.claude/util-my-color.mjs
+#   ~/Library/Application Support/Code/User/settings.json
+#   ~/Library/Application Support/Code/User/keybindings.json
+#   VS Code extensions (eslint, prettier, rainbow-csv, git-graph) — `--force`
+#
+# Idempotent merge (preserves the rest of the file):
+#   ~/.claude.json — trust entry for PROJECT_DIR
+#
+# Only seeds if missing (VS Code may have the DB open):
+#   ~/Library/Application Support/Code/User/globalStorage/state.vscdb
+#   ~/.claude.json (full bootstrap — overwriting clobbers numStartups,
+#     theme, tipsHistory and the rest of Claude's accumulated state)
+#
+# Run from anywhere:
+#   curl -fsSL https://almostawake.com/update | bash
+#
+set -e
+
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+[ "$OS" = "darwin" ] || { echo "update: macOS only" >&2; exit 1; }
+
+BASE="https://almostawake.com"
+IF_HOME="$HOME/.if"
+
+say() { printf '%s\n' "$*"; }
+
+# === ~/.claude asset files ===
+mkdir -p "$HOME/.claude"
+say "→ ~/.claude/CLAUDE.md"
+curl -fsSL "$BASE/assets/claude.md" -o "$HOME/.claude/CLAUDE.md"
+say "→ ~/.claude/settings.json"
+curl -fsSL "$BASE/assets/claude-settings.json" -o "$HOME/.claude/settings.json"
+say "→ ~/.claude/hook-session-namer.mjs"
+curl -fsSL "$BASE/assets/hook-session-namer.mjs" -o "$HOME/.claude/hook-session-namer.mjs"
+chmod +x "$HOME/.claude/hook-session-namer.mjs"
+say "→ ~/.claude/util-my-color.mjs"
+curl -fsSL "$BASE/assets/util-my-color.mjs" -o "$HOME/.claude/util-my-color.mjs"
+chmod +x "$HOME/.claude/util-my-color.mjs"
+
+# === ~/.claude.json: bootstrap if missing, then trust PROJECT_DIR ===
+claude_json="$HOME/.claude.json"
+if [ ! -f "$claude_json" ]; then
+  say "→ ~/.claude.json (bootstrap, theme auto-detect)"
+  curl -fsSL "$BASE/assets/claude.json" -o "$claude_json"
+  theme="light"
+  defaults read -g AppleInterfaceStyle 2>/dev/null | grep -q Dark && theme="dark"
+  tmp=$(mktemp)
+  THEME="$theme" perl -MJSON::PP -e '
+    local $/;
+    my $j = decode_json(<STDIN>);
+    $j->{theme} = $ENV{THEME};
+    print JSON::PP->new->pretty->canonical->encode($j);
+  ' < "$claude_json" > "$tmp" && mv "$tmp" "$claude_json"
+fi
+
+# Trust PROJECT_DIR — merge, preserves rest of the file.
+proj_dir="${PROJECT_DIR:-$HOME/Projects}"
+[ -f "$claude_json" ] || printf '{}\n' > "$claude_json"
+tmp=$(mktemp)
+PATH_TO_TRUST="$proj_dir" perl -MJSON::PP -e '
+  local $/;
+  my $j = decode_json(<STDIN>);
+  $j->{projects}{$ENV{PATH_TO_TRUST}} //= {};
+  $j->{projects}{$ENV{PATH_TO_TRUST}}{hasTrustDialogAccepted} = JSON::PP::true;
+  $j->{projects}{$ENV{PATH_TO_TRUST}}{hasCompletedProjectOnboarding} = JSON::PP::true;
+  print JSON::PP->new->pretty->canonical->encode($j);
+' < "$claude_json" > "$tmp" && mv "$tmp" "$claude_json"
+say "→ ~/.claude.json (trust $proj_dir)"
+
+# === VS Code user settings + keybindings ===
+code_user="$HOME/Library/Application Support/Code/User"
+mkdir -p "$code_user"
+say "→ Code/User/settings.json"
+curl -fsSL "$BASE/assets/vscode-settings.json" -o "$code_user/settings.json"
+say "→ Code/User/keybindings.json"
+curl -fsSL "$BASE/assets/vscode-keybindings.json" -o "$code_user/keybindings.json"
+
+# === state.vscdb welcome-modal seed (only if missing) ===
+# VS Code locks the DB while running and the user's accumulated workspace
+# state lives here — never overwrite a populated DB.
+code_global="$code_user/globalStorage"
+mkdir -p "$code_global"
+state_db="$code_global/state.vscdb"
+if [ ! -f "$state_db" ] && command -v sqlite3 >/dev/null 2>&1; then
+  say "→ state.vscdb (welcome-modal seed)"
+  sqlite3 "$state_db" <<'STATESEED' || true
+CREATE TABLE IF NOT EXISTS ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);
+INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('welcomeOnboarding.state', 'true');
+INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('chat.setupContext', '{"installed":true,"disabled":true,"disabledInWorkspace":false}');
+INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('chat.setupContext.migrated.v1', 'true');
+INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('builtinChatExtensionEnablementMigration', 'true');
+INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('workbench.auxiliaryBar.empty', 'true');
+STATESEED
+fi
+
+# === VS Code extensions ===
+code_cli="$IF_HOME/vscode/bin/code"
+if [ -x "$code_cli" ]; then
+  for ext in dbaeumer.vscode-eslint esbenp.prettier-vscode mechatroner.rainbow-csv mhutchie.git-graph; do
+    say "→ ext: $ext"
+    "$code_cli" --install-extension "$ext" --force >/dev/null 2>&1 || say "   (install failed — VS Code may be running)"
+  done
+else
+  say "skip extensions: $code_cli not found (run \`n\` first)"
+fi
+
+say ""
+say "update complete."

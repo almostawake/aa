@@ -19,7 +19,7 @@
 #    4. DETECT WHAT'S INSTALLED
 #    5. WARNING + OPT-IN
 #    6. INSTALL HELPERS
-#    7. CONFIGURE HELPERS (terminal, workspace, dock)
+#    7. CONFIGURE HELPERS (workspace, dock)
 #    8. ZSHRC MARKER BLOCK
 #    9. ROW UI + INSTALL/CONFIGURE ORCHESTRATOR
 #   10. SETTING UP NEW PROJECT (intro + auth happens in row UI below)
