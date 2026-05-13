@@ -1599,6 +1599,8 @@ PROV_PENDING=(
   "enable cloud pub/sub api"
   "enable cloud scheduler api"
   "enable gemini api"
+  "enable gmail api"
+  "enable google calendar api"
   "enable api keys api"
   "create web app config"
   "create firestore (sydney)"
@@ -1625,6 +1627,8 @@ PROV_RUNNING=(
   "enabling cloud pub/sub api"
   "enabling cloud scheduler api"
   "enabling gemini api"
+  "enabling gmail api"
+  "enabling google calendar api"
   "enabling api keys api"
   "creating web app config"
   "creating firestore (sydney)"
@@ -1651,6 +1655,8 @@ PROV_DONE=(
   "cloud pub/sub api enabled"
   "cloud scheduler api enabled"
   "gemini api enabled"
+  "gmail api enabled"
+  "google calendar api enabled"
   "api keys api enabled"
   "web app config created"
   "firestore (sydney) created"
@@ -1677,6 +1683,8 @@ PROV_FNS=(
   "_prov_enable_pubsub"
   "_prov_enable_cloudscheduler"
   "_prov_enable_gemini"
+  "_prov_enable_gmail"
+  "_prov_enable_calendar"
   "_prov_enable_apikeys"
   "_prov_web_app"
   "_prov_firestore"
@@ -1813,6 +1821,8 @@ _prov_enable_eventarc()         { enable_api "$PID" eventarc.googleapis.com; }
 _prov_enable_pubsub()           { enable_api "$PID" pubsub.googleapis.com; }
 _prov_enable_cloudscheduler()   { enable_api "$PID" cloudscheduler.googleapis.com; }
 _prov_enable_gemini()           { enable_api "$PID" generativelanguage.googleapis.com; }
+_prov_enable_gmail()            { enable_api "$PID" gmail.googleapis.com; }
+_prov_enable_calendar()         { enable_api "$PID" calendar-json.googleapis.com; }
 _prov_enable_apikeys()          { enable_api "$PID" apikeys.googleapis.com; }
 _prov_web_app()                 { create_web_app "$PID"; }
 _prov_firestore()               { create_firestore "$PID"; }
