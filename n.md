@@ -36,6 +36,12 @@ Both optional. Skip with no flags for the normal interactive flow.
   the project doesn't exist or isn't accessible to the signed-in
   account. Provisioning steps short-circuit on detection (see Re-run
   safety), so re-running on a fully-provisioned project is safe.
+- `--skip-setup` — assume a prior run already installed and configured
+  the machine: skip the opt-in prompt, the dependency install pass, the
+  workspace/Dock config, and the `~/.zshrc` block. Dependency detection
+  still runs — if anything is missing, `n` bails (no install attempt)
+  and tells you to re-run without the flag. For returning users
+  spinning up another project on an already-set-up machine.
 
 If `n` is invoked from inside a directory that already contains a
 `.env.auth.json` (e.g. spinning up a sibling project from an

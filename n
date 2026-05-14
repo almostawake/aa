@@ -66,12 +66,22 @@ die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 #                         or isn't accessible we surface a fatal error
 #                         at the create-project row, same style as
 #                         other fatals.
+#   --skip-setup          assume a prior run already installed + set up
+#                         the machine: skip the opt-in prompt, the
+#                         dependency install pass, the workspace/Dock
+#                         config, and the ~/.zshrc block. Detection
+#                         still runs — if anything is missing we bail
+#                         rather than limp into a cryptic mid-provision
+#                         failure. For returning users spinning up
+#                         their Nth project.
 REUSE_PROJECT_ID=""
+SKIP_SETUP=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --reuse-project)   [ -n "${2-}" ] || die "--reuse-project requires a project id"
                        REUSE_PROJECT_ID="$2"; shift 2 ;;
     --reuse-project=*) REUSE_PROJECT_ID="${1#*=}"; shift ;;
+    --skip-setup)      SKIP_SETUP=true; shift ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -264,38 +274,41 @@ for x in "${INSTALLED[@]}"; do [ "$x" = "false" ] && N_TODO=$((N_TODO + 1)); don
 # =====================================================================
 # 5. WARNING + OPT-IN
 # =====================================================================
-# Shown on every run. The acceptance is cheap (one "yes") and the
-# reminder is worth re-surfacing — the user may have habits that slip.
+# Shown on every run except --skip-setup (a returning user has already
+# accepted it). The acceptance is cheap (one "yes") and the reminder is
+# worth re-surfacing — the user may have habits that slip.
 
-echo ""
-echo "Let's get you set up.  but first ..."
-echo ""
-echo "═══════════════════════════════ WARNING ═══════════════════════════════"
-echo ""
-echo "read the following warning and accept only if you're comfortable:"
-echo ""
-echo "  1. these tools are for hobby purposes, not to be used at work"
-echo "  2. don't put sensitive data in this app"
-echo "  3. use separate mac and gmail accounts — not your daily ones"
-echo ""
-echo "═══════════════════════════════════════════════════════════════════════"
-echo ""
-# Cursor dance on bad input: write the error on the line below
-# (where the user's enter just landed), then jump back UP to the
-# prompt line and erase it so the loop's next prompt redraws clean.
-# Net effect: error stays visible underneath, prompt sits right above
-# it ready for another try. On success, erase the line below in case
-# a stale error sits there.
-while true; do
-  printf "do you understand (yes/NO) "
-  read -r _ack </dev/tty || _ack=""
-  if [ "$_ack" = "yes" ]; then
-    printf "\r\033[K"
-    break
-  fi
-  printf "\r\033[K✗  type 'yes' (literally) to accept the warning"
-  printf "\033[1A\r\033[K"
-done
+if [ "$SKIP_SETUP" = false ]; then
+  echo ""
+  echo "Let's get you set up.  but first ..."
+  echo ""
+  echo "═══════════════════════════════ WARNING ═══════════════════════════════"
+  echo ""
+  echo "read the following warning and accept only if you're comfortable:"
+  echo ""
+  echo "  1. these tools are for hobby purposes, not to be used at work"
+  echo "  2. don't put sensitive data in this app"
+  echo "  3. use separate mac and gmail accounts — not your daily ones"
+  echo ""
+  echo "═══════════════════════════════════════════════════════════════════════"
+  echo ""
+  # Cursor dance on bad input: write the error on the line below
+  # (where the user's enter just landed), then jump back UP to the
+  # prompt line and erase it so the loop's next prompt redraws clean.
+  # Net effect: error stays visible underneath, prompt sits right above
+  # it ready for another try. On success, erase the line below in case
+  # a stale error sits there.
+  while true; do
+    printf "do you understand (yes/NO) "
+    read -r _ack </dev/tty || _ack=""
+    if [ "$_ack" = "yes" ]; then
+      printf "\r\033[K"
+      break
+    fi
+    printf "\r\033[K✗  type 'yes' (literally) to accept the warning"
+    printf "\033[1A\r\033[K"
+  done
+fi
 
 # =====================================================================
 # 6. INSTALL HELPERS
@@ -988,41 +1001,64 @@ run_install() {
   fi
 }
 
-# Always render the row UI — even on re-runs where everything is
-# already installed, the user sees the verification pass before we
-# move on. Already-installed items render green from the start (no
-# spinner / no install function); missing items go pending → running
-# → done as they install.
-echo ""
-echo "checking/installing dependencies"
-echo ""
-
-for i in $(seq 0 $((N - 1))); do
-  if [ "${INSTALLED[$i]}" = "true" ]; then
-    draw_row "$i" "installed"
-  else
-    draw_row "$i" "pending"
+if [ "$SKIP_SETUP" = true ]; then
+  # --skip-setup: trust that a prior run installed + configured the
+  # machine. Detection (§4) still ran — enforce it here: bail on
+  # anything missing rather than limping into a cryptic mid-provision
+  # failure. No PATH export needed — a returning user invokes us via
+  # the `n` alias, so their interactive shell already sourced the
+  # ~/.zshrc block. _configure_workspace / _write_zshrc are skipped.
+  missing=()
+  for i in "${!ITEMS[@]}"; do
+    [ "${INSTALLED[$i]}" = "true" ] || missing+=("${ITEMS[$i]}")
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo ""
+    echo "✗  --skip-setup given, but these dependencies aren't installed:"
+    for m in "${missing[@]}"; do echo "     - $m"; done
+    echo ""
+    echo "   re-run 'n' without --skip-setup to install them first"
+    echo ""
+    trap - EXIT
+    exit 1
   fi
-done
+else
+  # Always render the row UI — even on re-runs where everything is
+  # already installed, the user sees the verification pass before we
+  # move on. Already-installed items render green from the start (no
+  # spinner / no install function); missing items go pending → running
+  # → done as they install.
+  echo ""
+  echo "checking/installing dependencies"
+  echo ""
 
-for i in "${!ITEMS[@]}"; do
-  [ "${INSTALLED[$i]}" = "true" ] && continue
-  run_install "$i" "${INSTALL_FNS[$i]}"
-done
+  for i in $(seq 0 $((N - 1))); do
+    if [ "${INSTALLED[$i]}" = "true" ]; then
+      draw_row "$i" "installed"
+    else
+      draw_row "$i" "pending"
+    fi
+  done
 
-# Make just-installed binaries usable for the rest of this run.
-export PATH="$IF_HOME/gh/bin:$IF_HOME/jq/bin:$IF_HOME/git/bin:$IF_HOME/node/bin:$IF_HOME/claude/bin:$IF_HOME/vscode/bin:$PATH"
-[ -d "$IF_HOME/git/lib" ] && export DYLD_FALLBACK_LIBRARY_PATH="$IF_HOME/git/lib"
-[ -d "$IF_HOME/java/Contents/Home" ] && export JAVA_HOME="$IF_HOME/java/Contents/Home" && export PATH="$JAVA_HOME/bin:$PATH"
-[ -d "$IF_HOME/java/bin" ] && export JAVA_HOME="$IF_HOME/java" && export PATH="$JAVA_HOME/bin:$PATH"
+  for i in "${!ITEMS[@]}"; do
+    [ "${INSTALLED[$i]}" = "true" ] && continue
+    run_install "$i" "${INSTALL_FNS[$i]}"
+  done
 
-# Silent end-steps (no row, just do the work). Idempotent.
-_configure_workspace >> "$INSTALL_LOG" 2>&1 || true
+  # Make just-installed binaries usable for the rest of this run.
+  export PATH="$IF_HOME/gh/bin:$IF_HOME/jq/bin:$IF_HOME/git/bin:$IF_HOME/node/bin:$IF_HOME/claude/bin:$IF_HOME/vscode/bin:$PATH"
+  [ -d "$IF_HOME/git/lib" ] && export DYLD_FALLBACK_LIBRARY_PATH="$IF_HOME/git/lib"
+  [ -d "$IF_HOME/java/Contents/Home" ] && export JAVA_HOME="$IF_HOME/java/Contents/Home" && export PATH="$JAVA_HOME/bin:$PATH"
+  [ -d "$IF_HOME/java/bin" ] && export JAVA_HOME="$IF_HOME/java" && export PATH="$JAVA_HOME/bin:$PATH"
 
-# Always rewrite the marker block — cheap, idempotent, catches users
-# migrating from old `i` / `setup-project` aliases that now point at
-# dead paths.
-_write_zshrc >> "$INSTALL_LOG" 2>&1 || true
+  # Silent end-steps (no row, just do the work). Idempotent.
+  _configure_workspace >> "$INSTALL_LOG" 2>&1 || true
+
+  # Always rewrite the marker block — cheap, idempotent, catches users
+  # migrating from old `i` / `setup-project` aliases that now point at
+  # dead paths.
+  _write_zshrc >> "$INSTALL_LOG" 2>&1 || true
+fi
 
 # =====================================================================
 # 10. SETTING UP NEW PROJECT (intro + auth happens in row UI below)
