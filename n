@@ -1435,7 +1435,12 @@ create_firestore() {
   local check_body; check_body=$(cat "$check_tmp"); rm -f "$check_tmp"
   http_log "create_firestore $pid skip-check → HTTP $check_code body: $(log_trunc "$check_body")"
   if [ "$check_code" = "200" ]; then
-    http_log "create_firestore $pid: (default) exists, skipping"
+    # Existing DB (e.g. --reuse-project): its region is fixed and authoritative.
+    # Adopt it as REGION so .env records the truth, not whatever --region said.
+    local existing_region
+    existing_region=$(printf '%s' "$check_body" | json_extract locationId)
+    [ -n "$existing_region" ] && REGION="$existing_region"
+    http_log "create_firestore $pid: (default) exists in '$REGION', skipping create"
     return 0
   fi
 
@@ -1997,8 +2002,10 @@ _move_auth_cred() {
 _write_env() {
   cat > "$PROJECT_PATH/.env" <<ENVEOF
 # Written by n. .env is gitignored — local to this machine.
-# Deploy wrapper reads THIS_PROJECT_ID_ON_GOOGLE_HOSTING + ACCOUNT_EMAIL.
+# Deploy wrapper reads THIS_PROJECT_ID_ON_GOOGLE_HOSTING + ACCOUNT_EMAIL;
+# the functions build reads THIS_PROJECT_REGION_ON_GOOGLE_HOSTING.
 THIS_PROJECT_ID_ON_GOOGLE_HOSTING=$PID
+THIS_PROJECT_REGION_ON_GOOGLE_HOSTING=$REGION
 ACCOUNT_EMAIL=$EMAIL
 ENVEOF
 }
