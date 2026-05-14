@@ -51,6 +51,11 @@ MARKER_END="# <<< if install <<<"
 mkdir -p "$IF_HOME"
 : > "$INSTALL_LOG"
 
+# Snapshot the invocation directory before anything else. Used later to
+# probe for an existing .env.auth.json the user wants to reuse when
+# spinning up a sibling project from inside an already-provisioned one.
+INVOCATION_CWD="$PWD"
+
 say()     { printf '%s\n' "$*"; }
 die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 
@@ -61,28 +66,15 @@ die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 #                         or isn't accessible we surface a fatal error
 #                         at the create-project row, same style as
 #                         other fatals.
-#   --auth <path>         skip the OAuth browser flow and reuse the
-#                         given .env.auth.json cred file. We drop the
-#                         file at $IF_HOME/.env.auth.json and let
-#                         cmd-auth.mjs probe it (its built-in
-#                         "valid? reuse silently" path).
 REUSE_PROJECT_ID=""
-AUTH_FILE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --reuse-project)   [ -n "${2-}" ] || die "--reuse-project requires a project id"
                        REUSE_PROJECT_ID="$2"; shift 2 ;;
     --reuse-project=*) REUSE_PROJECT_ID="${1#*=}"; shift ;;
-    --auth)            [ -n "${2-}" ] || die "--auth requires a path"
-                       AUTH_FILE="$2"; shift 2 ;;
-    --auth=*)          AUTH_FILE="${1#*=}"; shift ;;
     *) die "unknown argument: $1" ;;
   esac
 done
-if [ -n "$AUTH_FILE" ]; then
-  [ -f "$AUTH_FILE" ] && [ -r "$AUTH_FILE" ] \
-    || die "--auth file '$AUTH_FILE' not found or not readable"
-fi
 
 prompt_yn() {
   local q="$1" def="$2" hint answer
@@ -1044,15 +1036,17 @@ echo ""
 echo "setting up google hosting"
 echo ""
 
-# Defensive: kill any stale cred from a prior failed run (otherwise
-# cmd-auth.mjs would probe it, find it valid, and silently reuse the
-# old account for this new project — bypassing the fresh-sign-in-per-
-# project model).
-# With --auth: the user explicitly wants to reuse a specific cred, so
-# we drop it in after the wipe. cmd-auth.mjs then probes, finds it
-# valid, and skips the browser flow.
+# Wipe any stale cred from a prior failed run — otherwise cmd-auth.mjs
+# would probe it and silently bind the new project to the wrong account.
+# Then, if the user ran n from inside a project that already has its
+# own .env.auth.json (e.g. spinning up a sibling project), seed
+# $IF_HOME with that cred. cmd-auth.mjs probes it next: silently
+# reuses if still valid, refreshes / re-prompts the browser flow if
+# stale.
 rm -f "$IF_HOME/.env.auth.json"
-[ -n "$AUTH_FILE" ] && cp "$AUTH_FILE" "$IF_HOME/.env.auth.json"
+if [ -f "$INVOCATION_CWD/.env.auth.json" ]; then
+  cp "$INVOCATION_CWD/.env.auth.json" "$IF_HOME/.env.auth.json"
+fi
 
 # Fetch cmd-auth.mjs fresh — small file, idempotent. Lands at
 # ~/.if/cmd-auth.mjs; cred will land alongside as .env.auth.json.
@@ -2005,29 +1999,33 @@ CODE_THAT_OTHER_SERVICES_NEED_TO_GET_PAST_OUR_BOUNCER=
 ENVEOF
 }
 
-# Seed the project owner's email into Firestore's `allowedEmails` so
-# they can use the app on day one. firestore.rules require an existing
-# membership before allowing reads/writes — without this seed the first
-# user is locked out. The OAuth bearer token has cloud-platform scope
-# (admin), bypasses security rules. 200 = created, 409 = already exists
-# (treated as success so re-runs are no-ops).
+# Seed the project owner's email into Firestore's `users` collection so
+# they can sign in to /admin on day one. firestore.rules require an
+# existing membership before allowing reads/writes — without this seed
+# the first user is locked out. The OAuth bearer token has cloud-platform
+# scope (admin), bypasses security rules. 200 = created, 409 = already
+# exists (treated as success so re-runs are no-ops).
 #
-# Schema (see client/src/lib/types/AllowedEmail.ts in the template):
+# Schema mirrored by hand from the template's canonical zod schema at
+# functions/src/common/User.ts (and the matching cmd-seed-user.mjs the
+# emulator uses). If you change User.ts, mirror the change here too.
 #   doc id: lowercased email
-#   fields: { email, addedAt (ms epoch), addedBy }
-_seed_allowed_email() {
+#   fields: { email, admin, addedAt (ms epoch), addedBy }
+# `addedBy` is "bootstrap" (not the owner's email) to reflect that this
+# row was written by automation, not by a person on the /admin page.
+_seed_user() {
   local email_lc now_ms body code
   email_lc=$(printf '%s' "$EMAIL" | tr '[:upper:]' '[:lower:]')
   now_ms=$(($(date +%s) * 1000))
-  body=$(printf '{"fields":{"email":{"stringValue":"%s"},"addedAt":{"integerValue":"%d"},"addedBy":{"stringValue":"%s"}}}' \
-    "$email_lc" "$now_ms" "$email_lc")
+  body=$(printf '{"fields":{"email":{"stringValue":"%s"},"admin":{"booleanValue":true},"addedAt":{"integerValue":"%d"},"addedBy":{"stringValue":"bootstrap"}}}' \
+    "$email_lc" "$now_ms")
   code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
     -H "Authorization: Bearer $ACCESS_TOKEN" \
     -H "X-Goog-User-Project: $PID" \
     -H "Content-Type: application/json" \
     --data "$body" \
-    "https://firestore.googleapis.com/v1/projects/$PID/databases/(default)/documents/allowedEmails?documentId=$email_lc")
-  http_log "_seed_allowed_email: HTTP $code for allowedEmails/$email_lc"
+    "https://firestore.googleapis.com/v1/projects/$PID/databases/(default)/documents/users?documentId=$email_lc")
+  http_log "_seed_user: HTTP $code for users/$email_lc"
   case "$code" in
     200|409) return 0 ;;
     *) return 1 ;;
@@ -2070,7 +2068,7 @@ DEPLOY_FNS=(
 DEPLOY_N=${#DEPLOY_PENDING[@]}
 
 _dep_download() { _clone_template && _move_auth_cred; }
-_dep_tailor()   { _write_env && _write_client_env && _write_functions_env && _seed_allowed_email && _trust_path "$PROJECT_PATH"; }
+_dep_tailor()   { _write_env && _write_client_env && _write_functions_env && _seed_user && _trust_path "$PROJECT_PATH"; }
 _dep_deploy()   { _install_deps && _deploy_to_fb; }
 
 draw_dep_row() {
