@@ -1983,20 +1983,15 @@ _write_client_env() {
   ' > "$PROJECT_PATH/client/.env"
 }
 
-# Write functions/.env with the bouncer key — the secret other services
-# must send when calling our cloud functions. functions/ may not exist
-# yet (template ships without function code), so mkdir first. Empty
-# value: the user fills it in (or generates) when adding their first
-# function. .env is gitignored so the secret never reaches the repo.
+# Seed functions/.env from the template's functions/.env.example — it
+# carries every key the functions runtime expects (bouncer secret, OAuth
+# consent id/key, ADMIN_CONSENTS), so copying keeps n in sync as the
+# template grows keys. n copies the example's empty placeholders
+# verbatim; the bouncer is the only one a project strictly needs, and the
+# user fills it in (or generates one) when adding their first function.
+# .env is gitignored so secrets never reach the repo.
 _write_functions_env() {
-  mkdir -p "$PROJECT_PATH/functions"
-  cat > "$PROJECT_PATH/functions/.env" <<ENVEOF
-# Written by n. functions/.env is gitignored — local to this machine.
-# Set this to a long random string. Anyone calling this project's cloud
-# functions must send it (e.g. in an X-API-Key header) to get past the
-# bouncer. Keep secret.
-CODE_THAT_OTHER_SERVICES_NEED_TO_GET_PAST_OUR_BOUNCER=
-ENVEOF
+  cp "$PROJECT_PATH/functions/.env.example" "$PROJECT_PATH/functions/.env"
 }
 
 # Seed the project owner's email into Firestore's `users` collection so
