@@ -2019,15 +2019,61 @@ _write_client_env() {
   ' > "$PROJECT_PATH/client/.env"
 }
 
+# A curated ~330-word list of short, plain English nouns — the only use
+# is _gen_passphrase below. Not cryptographic entropy: ~330^3 ≈ 36M
+# combos, enough that an opportunistic scanner won't guess the bouncer
+# secret, but not a substitute for a real secret on a high-value
+# endpoint. All words ≤5 letters, concrete, easy to say and type.
+PASSPHRASE_WORDS="
+ant ape bat bear bee bird boar bug calf carp cat clam cod colt cow crab
+crow deer dog dove duck eel elk ewe fawn fish flea foal fox frog goat hare
+hawk hen hog kid lamb lark lion lynx mare mink mole moth mule newt owl ox
+pig pony pug pup ram rat seal slug snail sole swan toad trout tuna wasp wolf
+worm wren yak bay bog cave clay cliff cloud coal cove crag dawn dew dirt
+dune dust fern field fire fog gale glade gulf hail haze hill ice isle lake
+leaf loam mist moon moss mud peak pine pond rain reef ridge rock root sand
+sea seed sky sleet snow soil star stone storm sun surf tide tree vale wave
+weed wind wood bag bell belt bench boot bowl box broom brush bulb cane cap
+card cart chain chair chalk chest clock cloth coat coil comb cone cord crate
+cube cup desk dish dock dome door drum fan file flag fork frame glass glove
+hat hook jar jug key knife knob lamp latch lid lock mat mug net pad pail pan
+peg pen pin pipe plank plate plug pole pot quilt rack rail rake ramp rim
+robe rope rug sack scale screw seat shed sheet shelf shirt shoe sink slab
+sled soap sock spoon stamp stool stove strap tag tank tape tent tile tin
+tray tub vase vest wheel wire yarn apple bean beef beet berry bread broth
+bun cake chip corn cream crust curd date dough egg fig fruit grain grape gum
+ham herb honey jam juice kale leek lime loaf malt meat melon milk mint nut
+oat oil olive onion pea peach pear plum pork rice roll salt sauce soup stew
+sugar syrup tart toast yam arm bone brain brow cheek chin ear elbow eye face
+fang fist foot hair hand head heel hip jaw knee lap leg lip lung neck nose
+palm rib shin skin spine thumb toe tooth vein wrist
+"
+
+# Generate a 3-word dash-joined passphrase, e.g. "bath-tree-cone". Used
+# to seed the bouncer secret in functions/.env. $RANDOM is fine here —
+# see the entropy note on PASSPHRASE_WORDS.
+_gen_passphrase() {
+  local words i out=
+  words=( $PASSPHRASE_WORDS )
+  for i in 1 2 3; do
+    out="${out:+$out-}${words[RANDOM % ${#words[@]}]}"
+  done
+  printf '%s' "$out"
+}
+
 # Seed functions/.env from the template's functions/.env.example — it
 # carries every key the functions runtime expects (bouncer secret, OAuth
 # consent id/key, ADMIN_CONSENTS), so copying keeps n in sync as the
-# template grows keys. n copies the example's empty placeholders
-# verbatim; the bouncer is the only one a project strictly needs, and the
-# user fills it in (or generates one) when adding their first function.
+# template grows keys. The OAuth/consent keys stay as the example's empty
+# placeholders (they need real Cloud Console values), but we fill the
+# bouncer secret with a generated 3-word passphrase so the project's
+# inbound endpoints aren't wide open on day one. If the template ever
+# renames the bouncer key, the sed below silently no-ops — re-check it.
 # .env is gitignored so secrets never reach the repo.
 _write_functions_env() {
+  local key="CODE_THAT_OTHER_SERVICES_NEED_TO_GET_PAST_OUR_BOUNCER"
   cp "$PROJECT_PATH/functions/.env.example" "$PROJECT_PATH/functions/.env"
+  sed -i '' "s/^$key=\$/$key=$(_gen_passphrase)/" "$PROJECT_PATH/functions/.env"
 }
 
 # Seed the project owner's email into Firestore's `users` collection so
