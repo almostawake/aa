@@ -29,13 +29,19 @@ The `-s --` lets the alias forward flags through to the script.
 
 ## Flags
 
-Both optional. Skip with no flags for the normal interactive flow.
+All optional. Skip with no flags for the normal interactive flow.
 
 - `--reuse-project <id>` — skip the project chooser and use the named
   (already-existing) GCP project. Fatal at the create-project row if
   the project doesn't exist or isn't accessible to the signed-in
   account. Provisioning steps short-circuit on detection (see Re-run
   safety), so re-running on a fully-provisioned project is safe.
+- `--region <id>` — region for the new project's Firestore + Storage
+  (and therefore its Cloud Functions, which deploy alongside the data).
+  Single GCP region only, e.g. `us-central1` — multi-regions like `nam5`
+  aren't supported. Defaults to `australia-southeast1`. Ignored when
+  `--reuse-project` targets an existing project — its Firestore location
+  is already fixed.
 - `--skip-setup` — assume a prior run already installed and configured
   the machine: skip the opt-in prompt, the dependency install pass, the
   workspace/Dock config, and the `~/.zshrc` block. Dependency detection

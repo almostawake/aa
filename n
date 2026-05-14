@@ -66,6 +66,13 @@ die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 #                         or isn't accessible we surface a fatal error
 #                         at the create-project row, same style as
 #                         other fatals.
+#   --region <id>         region for the new project's Firestore + Storage
+#                         (and therefore its Cloud Functions, which deploy
+#                         alongside the data). Single GCP region only, e.g.
+#                         us-central1 — multi-regions (nam5, eur3) aren't
+#                         supported. Default australia-southeast1. Ignored
+#                         when --reuse-project targets an existing project:
+#                         its Firestore location is already fixed.
 #   --skip-setup          assume a prior run already installed + set up
 #                         the machine: skip the opt-in prompt, the
 #                         dependency install pass, the workspace/Dock
@@ -76,15 +83,29 @@ die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 #                         their Nth project.
 REUSE_PROJECT_ID=""
 SKIP_SETUP=false
+REGION="australia-southeast1"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --reuse-project)   [ -n "${2-}" ] || die "--reuse-project requires a project id"
                        REUSE_PROJECT_ID="$2"; shift 2 ;;
     --reuse-project=*) REUSE_PROJECT_ID="${1#*=}"; shift ;;
+    --region)          [ -n "${2-}" ] || die "--region requires a region id"
+                       REGION="$2"; shift 2 ;;
+    --region=*)        REGION="${1#*=}"; shift ;;
     --skip-setup)      SKIP_SETUP=true; shift ;;
     *) die "unknown argument: $1" ;;
   esac
 done
+
+# Firestore + Storage + Functions all land in $REGION, so it must be a single
+# GCP region (e.g. australia-southeast1, us-central1) — Functions can't deploy
+# to a multi-region (nam5, eur3, us, eu, asia). The shape check catches that
+# footgun early; the create-database API is the final word on whether it's a
+# real region.
+case "$REGION" in
+  *-*[0-9]) : ;;
+  *) die "--region must be a single region like us-central1 — got '$REGION' (multi-regions such as nam5/eur3 aren't supported: Functions can't deploy there)" ;;
+esac
 
 prompt_yn() {
   local q="$1" def="$2" hint answer
@@ -1400,7 +1421,7 @@ create_web_app() {
   X_GOOG_USER_PROJECT="$pid" wait_for_op "https://firebase.googleapis.com/v1beta1/$op_name" 120
 }
 
-# Create the (default) Firestore database in australia-southeast1, NATIVE mode.
+# Create the (default) Firestore database in $REGION, NATIVE mode.
 create_firestore() {
   local pid="$1"
 
@@ -1424,7 +1445,7 @@ create_firestore() {
     -H "Authorization: Bearer $ACCESS_TOKEN" \
     -H "X-Goog-User-Project: $pid" \
     -H "Content-Type: application/json" \
-    -d '{"locationId":"australia-southeast1","type":"FIRESTORE_NATIVE"}' \
+    -d "{\"locationId\":\"$REGION\",\"type\":\"FIRESTORE_NATIVE\"}" \
     "https://firestore.googleapis.com/v1/projects/$pid/databases?databaseId=(default)")
   local body; body=$(cat "$tmp"); rm -f "$tmp"
   http_log "create_firestore $pid → HTTP $code body: $(log_trunc "$body")"
@@ -1435,7 +1456,7 @@ create_firestore() {
   X_GOOG_USER_PROJECT="$pid" wait_for_op "https://firestore.googleapis.com/v1/$op_name" 180
 }
 
-# Create the default Firebase Storage bucket in australia-southeast1.
+# Create the default Firebase Storage bucket in $REGION.
 create_storage_bucket() {
   local pid="$1"
 
@@ -1457,7 +1478,7 @@ create_storage_bucket() {
     -H "Authorization: Bearer $ACCESS_TOKEN" \
     -H "X-Goog-User-Project: $pid" \
     -H "Content-Type: application/json" \
-    -d '{"location":"australia-southeast1"}' \
+    -d "{\"location\":\"$REGION\"}" \
     "https://firebasestorage.googleapis.com/v1beta/projects/$pid/defaultBucket")
   local body; body=$(cat "$tmp"); rm -f "$tmp"
   http_log "create_storage_bucket $pid → HTTP $code body: $(log_trunc "$body")"
