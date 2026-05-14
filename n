@@ -1995,19 +1995,18 @@ _move_auth_cred() {
   fi
 }
 
-# Write root .env that the deploy wrapper reads. .env is gitignored —
-# local to this machine. ACCOUNT_EMAIL pins the gcloud account so
-# multi-account machines deploy from the right one regardless of
-# `gcloud config set account` drift.
+# Seed root .env from the template's .env.example — copying keeps n in sync
+# as the template grows keys (same pattern as _write_functions_env). The
+# example carries each key as an empty `key=` placeholder; n fills the
+# per-project values here. .env is gitignored — local to this machine.
+# ACCOUNT_EMAIL pins the gcloud account so multi-account machines deploy from
+# the right one regardless of `gcloud config set account` drift.
 _write_env() {
-  cat > "$PROJECT_PATH/.env" <<ENVEOF
-# Written by n. .env is gitignored — local to this machine.
-# Deploy wrapper reads THIS_PROJECT_ID_ON_GOOGLE_HOSTING + ACCOUNT_EMAIL;
-# the functions build reads THIS_PROJECT_REGION_ON_GOOGLE_HOSTING.
-THIS_PROJECT_ID_ON_GOOGLE_HOSTING=$PID
-THIS_PROJECT_REGION_ON_GOOGLE_HOSTING=$REGION
-ACCOUNT_EMAIL=$EMAIL
-ENVEOF
+  local f="$PROJECT_PATH/.env"
+  cp "$PROJECT_PATH/.env.example" "$f"
+  sed -i '' "s|^THIS_PROJECT_ID_ON_GOOGLE_HOSTING=\$|THIS_PROJECT_ID_ON_GOOGLE_HOSTING=$PID|" "$f"
+  sed -i '' "s|^THIS_PROJECT_REGION_ON_GOOGLE_HOSTING=\$|THIS_PROJECT_REGION_ON_GOOGLE_HOSTING=$REGION|" "$f"
+  sed -i '' "s|^ACCOUNT_EMAIL=\$|ACCOUNT_EMAIL=$EMAIL|" "$f"
 }
 
 # Fetch the Firebase Web config and write client/.env. The "apiKey" is a
