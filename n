@@ -1344,45 +1344,83 @@ link_billing() {
   if [ "$code" != "200" ]; then return 1; fi
 }
 
-# Convert a GCP project to a Firebase project. Sets PREFLIGHT_REASON to
-# "no_firebase_tos" if the call fails because the user hasn't accepted
-# the Firebase ToS yet.
+# Convert a GCP project to a Firebase project. On failure, sets one of:
+#   ADD_FIREBASE_FATAL_REASON=no_firebase_tos    — user hasn't accepted ToS
+#   ADD_FIREBASE_FATAL_MSG="..."                 — anything else, with a
+#                                                  specific one-liner the
+#                                                  row UI can print verbatim.
+ADD_FIREBASE_FATAL_REASON=""
+ADD_FIREBASE_FATAL_MSG=""
+
+# Returns 0 if HTTP/body looks like the Firebase Management API hasn't
+# propagated yet after enable_api. Google's own message instructs us to
+# wait a few minutes — typically 30–90s after the enable op returns done.
+_is_service_disabled() {
+  local code="$1" body="$2"
+  [ "$code" = "403" ] && grep -q 'SERVICE_DISABLED\|has not been used in project' <<< "$body"
+}
+
 add_firebase() {
   local pid="$1"
+  ADD_FIREBASE_FATAL_REASON=""
+  ADD_FIREBASE_FATAL_MSG=""
 
   http_log "add_firebase start: pid=$pid"
-  local check_tmp; check_tmp=$(mktemp)
-  local check_code
-  check_code=$(curl -s -o "$check_tmp" -w "%{http_code}" \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
-    -H "X-Goog-User-Project: $pid" \
-    "https://firebase.googleapis.com/v1beta1/projects/$pid")
-  local check_body; check_body=$(cat "$check_tmp"); rm -f "$check_tmp"
-  http_log "add_firebase $pid skip-check → HTTP $check_code body: $(log_trunc "$check_body")"
-  if [ "$check_code" = "200" ]; then
-    http_log "add_firebase $pid: already Firebase, skipping"
-    return 0
-  fi
 
-  local tmp; tmp=$(mktemp)
-  local code
-  code=$(curl -s -o "$tmp" -w "%{http_code}" -X POST \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
-    -H "X-Goog-User-Project: $pid" \
-    -H "Content-Type: application/json" \
-    -d '{}' \
-    "https://firebase.googleapis.com/v1beta1/projects/$pid:addFirebase")
-  local body; body=$(cat "$tmp"); rm -f "$tmp"
-  http_log "add_firebase $pid → HTTP $code body: $(log_trunc "$body")"
+  # Skip-check: GET projects/$pid. 200 = already Firebase (skip);
+  # 404 = API live but not Firebase yet (proceed to POST);
+  # 403 SERVICE_DISABLED = enable_api propagation lag — retry.
+  local check_code check_body i
+  for i in $(seq 1 15); do
+    local check_tmp; check_tmp=$(mktemp)
+    check_code=$(curl -s -o "$check_tmp" -w "%{http_code}" \
+      -H "Authorization: Bearer $ACCESS_TOKEN" \
+      -H "X-Goog-User-Project: $pid" \
+      "https://firebase.googleapis.com/v1beta1/projects/$pid")
+    check_body=$(cat "$check_tmp"); rm -f "$check_tmp"
+    http_log "add_firebase $pid skip-check #$i → HTTP $check_code body: $(log_trunc "$check_body")"
+    [ "$check_code" = "200" ] && { http_log "add_firebase $pid: already Firebase, skipping"; return 0; }
+    if _is_service_disabled "$check_code" "$check_body"; then sleep 6; continue; fi
+    break
+  done
+
+  # POST :addFirebase, also tolerating SERVICE_DISABLED propagation. The
+  # GET above can succeed (404) while the POST still 403s — both endpoints
+  # propagate independently.
+  local code body
+  for i in $(seq 1 15); do
+    local tmp; tmp=$(mktemp)
+    code=$(curl -s -o "$tmp" -w "%{http_code}" -X POST \
+      -H "Authorization: Bearer $ACCESS_TOKEN" \
+      -H "X-Goog-User-Project: $pid" \
+      -H "Content-Type: application/json" \
+      -d '{}' \
+      "https://firebase.googleapis.com/v1beta1/projects/$pid:addFirebase")
+    body=$(cat "$tmp"); rm -f "$tmp"
+    http_log "add_firebase $pid POST #$i → HTTP $code body: $(log_trunc "$body")"
+    [ "$code" = "200" ] && break
+    if _is_service_disabled "$code" "$body"; then sleep 6; continue; fi
+    break
+  done
 
   if [ "$code" = "400" ] && grep -qi 'terms.of.service\|console\.developers\.google\.com/terms' <<< "$body"; then
-    PREFLIGHT_REASON="no_firebase_tos"
+    ADD_FIREBASE_FATAL_REASON="no_firebase_tos"
     return 1
   fi
-  if [ "$code" != "200" ]; then return 1; fi
+  if _is_service_disabled "$code" "$body"; then
+    ADD_FIREBASE_FATAL_MSG="Firebase Management API enablement still propagating after 90s — re-run in a minute or two"
+    return 1
+  fi
+  if [ "$code" != "200" ]; then
+    ADD_FIREBASE_FATAL_MSG="addFirebase failed with HTTP $code — see $HTTP_LOG"
+    return 1
+  fi
   local op_name; op_name=$(op_name_from "$body")
   http_log "add_firebase $pid op_name='$op_name'"
-  [ -z "$op_name" ] && return 1
+  if [ -z "$op_name" ]; then
+    ADD_FIREBASE_FATAL_MSG="addFirebase returned no op name — see $HTTP_LOG"
+    return 1
+  fi
   X_GOOG_USER_PROJECT="$pid" wait_for_op "https://firebase.googleapis.com/v1beta1/$op_name" 120
 }
 
@@ -1939,8 +1977,13 @@ provision_all() {
       elif [ "$fn" = "_prov_create" ] && [ -n "$PROV_CREATE_FATAL_MSG" ]; then
         echo "✗  $PROV_CREATE_FATAL_MSG"
       elif [ "$fn" = "_prov_add_firebase" ]; then
-        echo "✗  failed to add firebase — most likely Firebase ToS not accepted"
-        echo "   see https://github.com/almostawake/if#readme for the fix"
+        if [ "$ADD_FIREBASE_FATAL_REASON" = "no_firebase_tos" ]; then
+          print_setup_needed "$EMAIL" "no_firebase_tos"
+        elif [ -n "$ADD_FIREBASE_FATAL_MSG" ]; then
+          echo "✗  $ADD_FIREBASE_FATAL_MSG"
+        else
+          echo "✗  failed to add firebase — see $HTTP_LOG for details"
+        fi
       else
         echo "✗  $fn failed — see $HTTP_LOG for details"
       fi
