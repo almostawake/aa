@@ -84,6 +84,10 @@ die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 REUSE_PROJECT_ID=""
 SKIP_SETUP=false
 REGION="australia-southeast1"
+# Any flag passed (--region, --reuse-project, --skip-setup, etc.) means
+# this is a returning user driving n with intent — skip the warning prompt.
+HAD_ANY_ARGS=false
+[ "$#" -gt 0 ] && HAD_ANY_ARGS=true
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --reuse-project)   [ -n "${2-}" ] || die "--reuse-project requires a project id"
@@ -295,11 +299,11 @@ for x in "${INSTALLED[@]}"; do [ "$x" = "false" ] && N_TODO=$((N_TODO + 1)); don
 # =====================================================================
 # 5. WARNING + OPT-IN
 # =====================================================================
-# Shown on every run except --skip-setup (a returning user has already
-# accepted it). The acceptance is cheap (one "yes") and the reminder is
-# worth re-surfacing — the user may have habits that slip.
+# Shown on first-time / no-flag runs. Any flag passed (--skip-setup,
+# --reuse-project, --region) marks a returning user with intent — they've
+# already accepted, no need to re-prompt.
 
-if [ "$SKIP_SETUP" = false ]; then
+if [ "$SKIP_SETUP" = false ] && [ "$HAD_ANY_ARGS" = false ]; then
   echo ""
   echo "Let's get you set up.  but first ..."
   echo ""
@@ -832,62 +836,13 @@ _configure_workspace() {
   local proj_dir="${PROJECT_DIR:-$HOME/Projects}"
   mkdir -p "$proj_dir"
 
-  # === Pass 1: defaults write (cfprefsd in-memory cache) ===
-
-  # New Finder windows default to PROJECT_DIR.
-  defaults write com.apple.finder NewWindowTarget -string "PfLo" 2>/dev/null || true
-  defaults write com.apple.finder NewWindowTargetPath -string "file://$proj_dir/" 2>/dev/null || true
-
-  # Clean Dock: kill the Recents shelf so the right side doesn't fill
-  # with whatever they happen to launch.
-  defaults write com.apple.dock show-recents -bool false 2>/dev/null || true
-
-  # === Flush cfprefsd ===
-  # Force cfprefsd to flush its cache to disk before PlistBuddy edits the
-  # dock plist. Without this, PlistBuddy's Save overwrites the file with
-  # its stale on-disk view, losing the `defaults` writes.
-  killall cfprefsd 2>/dev/null || true
-  sleep 0.3
-
-  # === Pass 2: PlistBuddy edits on disk ===
-
-  # Strip the default Dock back to Safari + System Settings before
-  # adding our entries. Walk persistent-apps in reverse so deletes
-  # don't shift indices. Identity by bundle-identifier (more stable
-  # than _CFURLString — that varies across macOS versions).
-  local DOCK_PLIST="$HOME/Library/Preferences/com.apple.dock.plist"
-  if [ -f "$DOCK_PLIST" ]; then
-    local i bid
-    i=0
-    while /usr/libexec/PlistBuddy -c "Print :persistent-apps:$i" "$DOCK_PLIST" >/dev/null 2>&1; do
-      i=$((i+1))
-    done
-    i=$((i-1))
-    while [ "$i" -ge 0 ]; do
-      bid=$(/usr/libexec/PlistBuddy -c "Print :persistent-apps:$i:tile-data:bundle-identifier" "$DOCK_PLIST" 2>/dev/null || true)
-      case "$bid" in
-        com.apple.systempreferences) : ;;
-        *) /usr/libexec/PlistBuddy -c "Delete :persistent-apps:$i" "$DOCK_PLIST" 2>/dev/null || true ;;
-      esac
-      i=$((i-1))
-    done
-
-    # Nuke right-side stacks (Downloads etc.) for a clean right side.
-    i=0
-    while /usr/libexec/PlistBuddy -c "Print :persistent-others:$i" "$DOCK_PLIST" >/dev/null 2>&1; do
-      i=$((i+1))
-    done
-    i=$((i-1))
-    while [ "$i" -ge 0 ]; do
-      /usr/libexec/PlistBuddy -c "Delete :persistent-others:$i" "$DOCK_PLIST" 2>/dev/null || true
-      i=$((i-1))
-    done
-  fi
-
-  # Dock left side, immediately right of Finder:
+  # Add VS Code + Chrome-with-Claude to the Dock left side, immediately
+  # right of Finder:
   #   slot 0 — VS Code (pre-configured + auto-runs cc on folderOpen)
   #   slot 1 — Chrome with Claude Code (debug-port-enabled launcher)
   # Prepend in reverse order so final L-R is [vscode, chrome, ...rest].
+  # We don't strip the user's existing Dock items — they keep what they
+  # had, we just add ours to the front.
   # Also remove legacy URLs (IF Terminal applet, shell.command) so
   # upgrading installs don't leave a stale Dock entry.
   local url_vscode="file://$HOME/Applications/Visual%20Studio%20Code.app/"
