@@ -48,6 +48,18 @@ All optional. Skip with no flags for the normal interactive flow.
   still runs — if anything is missing, `n` bails (no install attempt)
   and tells you to re-run without the flag. For returning users
   spinning up another project on an already-set-up machine.
+- `--install-only` — run dependency install only. Skips the
+  workspace/Dock config, the `~/.zshrc` block, sign-in, project
+  creation, clone — everything past the install row UI. For setting up
+  a machine without provisioning a project. Mutually exclusive with
+  `--skip-setup`.
+- `--chrome-launcher-only` — dedicated rebuild path for the
+  Chrome-with-Claude launcher. Wipes any existing
+  `Chrome with Claude Code.app` from `/Applications` and `~/Applications`
+  (admin needed for the former — fails fast with a `sudo` hint), strips
+  its Dock entries, then rebuilds the launcher in `~/Applications` and
+  re-pins to the Dock. Refuses to build if Google Chrome itself isn't
+  installed. Does nothing else — no deps, no config, no cloud.
 
 If `n` is invoked from inside a directory that already contains a
 `.env.auth.json` (e.g. spinning up a sibling project from an

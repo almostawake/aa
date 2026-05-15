@@ -81,8 +81,22 @@ die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 #                         rather than limp into a cryptic mid-provision
 #                         failure. For returning users spinning up
 #                         their Nth project.
+#   --install-only        run dependency detect + install only. Skip
+#                         workspace/Dock config, the ~/.zshrc block,
+#                         sign-in, project creation, clone — everything
+#                         past the install row UI. For setting up a
+#                         machine without provisioning a project.
+#   --chrome-launcher-only
+#                         dedicated rebuild path for the Chrome-with-
+#                         Claude launcher: nuke any existing launcher
+#                         .app from /Applications + ~/Applications,
+#                         strip its Dock entries, then rebuild in
+#                         ~/Applications and re-pin to the Dock. Does
+#                         nothing else — no deps, no config, no cloud.
 REUSE_PROJECT_ID=""
 SKIP_SETUP=false
+INSTALL_ONLY=false
+CHROME_LAUNCHER_ONLY=false
 REGION="australia-southeast1"
 # Any flag passed (--region, --reuse-project, --skip-setup, etc.) means
 # this is a returning user driving n with intent — skip the warning prompt.
@@ -97,9 +111,14 @@ while [ "$#" -gt 0 ]; do
                        REGION="$2"; shift 2 ;;
     --region=*)        REGION="${1#*=}"; shift ;;
     --skip-setup)      SKIP_SETUP=true; shift ;;
+    --install-only)    INSTALL_ONLY=true; shift ;;
+    --chrome-launcher-only) CHROME_LAUNCHER_ONLY=true; shift ;;
     *) die "unknown argument: $1" ;;
   esac
 done
+
+[ "$INSTALL_ONLY" = true ] && [ "$SKIP_SETUP" = true ] && \
+  die "--install-only and --skip-setup are contradictory (one installs, the other skips installing)"
 
 # Firestore + Storage + Functions all land in $REGION, so it must be a single
 # GCP region (e.g. australia-southeast1, us-central1) — Functions can't deploy
@@ -628,6 +647,16 @@ _install_chrome() {
   fi
 
   # 2. Build/rebuild the launcher (always, so flag changes take effect on re-runs).
+  _build_chrome_launcher "$chrome_app"
+}
+
+# Build (or rebuild) ~/Applications/Chrome with Claude Code.app — the
+# launcher bundle the rest of the stack assumes lives there. Pass the
+# absolute path of Google Chrome.app so the bash inside hardcodes it.
+# Caller is responsible for ensuring chrome_app exists. See CLAUDE.md
+# for the strict launcher contract — the bash body is load-bearing.
+_build_chrome_launcher() {
+  local chrome_app="$1"
   local launcher_app="$HOME/Applications/Chrome with Claude Code.app"
   mkdir -p "$HOME/Applications"
   rm -rf "$launcher_app"
@@ -862,6 +891,54 @@ _configure_workspace() {
   killall Dock 2>/dev/null || true
 }
 
+# Dedicated entrypoint for --chrome-launcher-only. Wipes any existing
+# launcher .app from /Applications + ~/Applications, strips its Dock
+# entries, then rebuilds in ~/Applications and re-pins. Refuses to
+# build against a missing Google Chrome.app rather than producing a
+# launcher that hardcodes a path to nothing.
+_chrome_launcher_only_run() {
+  [ "$OS" = "darwin" ] || die "--chrome-launcher-only is macOS-only"
+
+  local chrome_app=""
+  [ -d "/Applications/Google Chrome.app" ]      && chrome_app="/Applications/Google Chrome.app"
+  [ -d "$HOME/Applications/Google Chrome.app" ] && chrome_app="$HOME/Applications/Google Chrome.app"
+  [ -z "$chrome_app" ] && die "Google Chrome not installed in /Applications or ~/Applications — install Chrome first, then re-run"
+
+  echo ""
+  echo "rebuilding Chrome launcher"
+  echo ""
+
+  # Delete any existing launcher from both standard locations.
+  # /Applications writes need admin — fail fast with a sudo hint
+  # rather than half-completing.
+  local p
+  for p in "/Applications/Chrome with Claude Code.app" \
+           "$HOME/Applications/Chrome with Claude Code.app"; do
+    if [ -d "$p" ]; then
+      if ! rm -rf "$p" 2>/dev/null; then
+        die "couldn't delete $p — needs admin. try: sudo rm -rf '$p' then re-run"
+      fi
+      echo "✓  removed $p"
+    fi
+  done
+
+  # Strip Dock entries pointing at either launcher location, then
+  # rebuild + re-pin in ~/Applications.
+  _dock_apps_remove_url "file://$HOME/Applications/Chrome%20with%20Claude%20Code.app/"
+  _dock_apps_remove_url "file:///Applications/Chrome%20with%20Claude%20Code.app/"
+
+  _build_chrome_launcher "$chrome_app"
+  echo "✓  rebuilt $HOME/Applications/Chrome with Claude Code.app"
+
+  _dock_apps_insert_at_zero "file://$HOME/Applications/Chrome%20with%20Claude%20Code.app/"
+  killall Dock 2>/dev/null || true
+
+  echo ""
+  echo "✓  done"
+  trap - EXIT
+  exit 0
+}
+
 # =====================================================================
 # 8. ZSHRC MARKER BLOCK
 # =====================================================================
@@ -977,6 +1054,12 @@ run_install() {
   fi
 }
 
+# --chrome-launcher-only short-circuits everything else: detection ran
+# (silent), warning was skipped (any-flag), now do just the rebuild.
+if [ "$CHROME_LAUNCHER_ONLY" = true ]; then
+  _chrome_launcher_only_run
+fi
+
 if [ "$SKIP_SETUP" = true ]; then
   # --skip-setup: trust that a prior run installed + configured the
   # machine. Detection (§4) still ran — enforce it here: bail on
@@ -1026,6 +1109,15 @@ else
   [ -d "$IF_HOME/git/lib" ] && export DYLD_FALLBACK_LIBRARY_PATH="$IF_HOME/git/lib"
   [ -d "$IF_HOME/java/Contents/Home" ] && export JAVA_HOME="$IF_HOME/java/Contents/Home" && export PATH="$JAVA_HOME/bin:$PATH"
   [ -d "$IF_HOME/java/bin" ] && export JAVA_HOME="$IF_HOME/java" && export PATH="$JAVA_HOME/bin:$PATH"
+
+  # --install-only: stop here. No workspace/Dock changes, no zshrc edit,
+  # no sign-in, no clone, no provisioning. Caller wanted just the deps.
+  if [ "$INSTALL_ONLY" = true ]; then
+    echo ""
+    echo "✓  done (--install-only)"
+    trap - EXIT
+    exit 0
+  fi
 
   # Silent end-steps (no row, just do the work). Idempotent.
   _configure_workspace >> "$INSTALL_LOG" 2>&1 || true
