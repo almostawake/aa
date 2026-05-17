@@ -73,19 +73,23 @@ die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 #                         supported. Default australia-southeast1. Ignored
 #                         when --reuse-project targets an existing project:
 #                         its Firestore location is already fixed.
-#   --skip-setup          assume a prior run already installed + set up
-#                         the machine: skip the opt-in prompt, the
-#                         dependency install pass, the workspace/Dock
-#                         config, and the ~/.zshrc block. Detection
-#                         still runs — if anything is missing we bail
+#   --project-only        skip the install + config phases (dependency
+#                         install pass, Claude config repair, workspace/
+#                         Dock, ~/.zshrc block) and go straight to
+#                         sign-in + project provisioning. Detection
+#                         still runs — if anything's missing we bail
 #                         rather than limp into a cryptic mid-provision
-#                         failure. For returning users spinning up
-#                         their Nth project.
-#   --install-only        run dependency detect + install only. Skip
-#                         workspace/Dock config, the ~/.zshrc block,
-#                         sign-in, project creation, clone — everything
-#                         past the install row UI. For setting up a
-#                         machine without provisioning a project.
+#                         failure. For returning users spinning up their
+#                         Nth project on an already-set-up machine.
+#   --setup-only          run install + config and stop. Skips sign-in,
+#                         project creation, clone, deploy. Config phase
+#                         seeds missing Claude files and merges required
+#                         keys (mcpServers.chrome-devtools, defaultMode,
+#                         skipDangerousModePermissionPrompt, session-
+#                         namer hook) into existing files without
+#                         clobbering user additions. For setting up a
+#                         machine + healing config without provisioning
+#                         a project.
 #   --chrome-launcher-only
 #                         dedicated rebuild path for the Chrome-with-
 #                         Claude launcher: nuke any existing launcher
@@ -112,13 +116,13 @@ die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 #                         Use when developing n itself on your daily
 #                         account, or when you accept the side effects.
 REUSE_PROJECT_ID=""
-SKIP_SETUP=false
-INSTALL_ONLY=false
+PROJECT_ONLY=false
+SETUP_ONLY=false
 CHROME_LAUNCHER_ONLY=false
 CHECK_ONLY=false
 OVERRIDE_OSX_USER_CHECK=false
 REGION="australia-southeast1"
-# Any flag passed (--region, --reuse-project, --skip-setup, etc.) means
+# Any flag passed (--region, --reuse-project, --project-only, etc.) means
 # this is a returning user driving n with intent — skip the warning prompt.
 HAD_ANY_ARGS=false
 [ "$#" -gt 0 ] && HAD_ANY_ARGS=true
@@ -130,8 +134,8 @@ while [ "$#" -gt 0 ]; do
     --region)          [ -n "${2-}" ] || die "--region requires a region id"
                        REGION="$2"; shift 2 ;;
     --region=*)        REGION="${1#*=}"; shift ;;
-    --skip-setup)      SKIP_SETUP=true; shift ;;
-    --install-only)    INSTALL_ONLY=true; shift ;;
+    --project-only)    PROJECT_ONLY=true; shift ;;
+    --setup-only)      SETUP_ONLY=true; shift ;;
     --chrome-launcher-only) CHROME_LAUNCHER_ONLY=true; shift ;;
     --check-only) CHECK_ONLY=true; shift ;;
     --override-osx-user-check) OVERRIDE_OSX_USER_CHECK=true; shift ;;
@@ -139,8 +143,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-[ "$INSTALL_ONLY" = true ] && [ "$SKIP_SETUP" = true ] && \
-  die "--install-only and --skip-setup are contradictory (one installs, the other skips installing)"
+[ "$SETUP_ONLY" = true ] && [ "$PROJECT_ONLY" = true ] && \
+  die "--setup-only and --project-only are mutually exclusive (one does install + config, the other skips both)"
 
 # Firestore + Storage + Functions all land in $REGION, so it must be a single
 # GCP region (e.g. australia-southeast1, us-central1) — Functions can't deploy
@@ -366,11 +370,11 @@ for x in "${INSTALLED[@]}"; do [ "$x" = "false" ] && N_TODO=$((N_TODO + 1)); don
 # =====================================================================
 # 5. WARNING + OPT-IN
 # =====================================================================
-# Shown on first-time / no-flag runs. Any flag passed (--skip-setup,
+# Shown on first-time / no-flag runs. Any flag passed (--project-only,
 # --reuse-project, --region) marks a returning user with intent — they've
 # already accepted, no need to re-prompt.
 
-if [ "$SKIP_SETUP" = false ] && [ "$HAD_ANY_ARGS" = false ]; then
+if [ "$PROJECT_ONLY" = false ] && [ "$HAD_ANY_ARGS" = false ]; then
   echo ""
   echo "Let's get you set up.  but first ..."
   echo ""
@@ -587,55 +591,15 @@ _trust_path() {
   ' < "$cred" > "$tmp" && mv "$tmp" "$cred"
 }
 
-# Claude Code binary + YOLO config files. Theme is auto-picked from
-# the user's macOS appearance on first install only — re-runs preserve
-# whatever theme the user later picked via Claude's /theme command.
+# Install the Claude Code npm package. Config file seeding + the JSON-
+# merge that keeps mcpServers / defaultMode / session-namer hook
+# consistent moved out to _apply_claude_config (in the config phase) so
+# it also runs for users who manually installed claude pre-n and have
+# a stale ~/.claude.json / ~/.claude/settings.json.
 _install_claude() {
   mkdir -p "$IF_HOME/claude"
   export PATH="$IF_HOME/claude/bin:$PATH"
   npm install --prefix "$IF_HOME/claude" -g @anthropic-ai/claude-code
-
-  # Seed config files into Claude Code's default location (~/.claude/
-  # for CLAUDE.md / settings.json / hooks / utils; ~/.claude.json at
-  # home root for onboarding state + MCP server registration). Fetched
-  # on demand (rather than baked into this script) so we can update
-  # the assets without bumping n.
-  mkdir -p "$HOME/.claude"
-  local base="https://almostawake.com"
-  [ -f "$HOME/.claude/CLAUDE.md" ] || \
-    curl -fsSL "$base/assets/claude.md" -o "$HOME/.claude/CLAUDE.md"
-  [ -f "$HOME/.claude/settings.json" ] || \
-    curl -fsSL "$base/assets/claude-settings.json" -o "$HOME/.claude/settings.json"
-  # session-namer hook (color emoji + session title) + my-color util
-  # (Bash-callable lookup). Both live alongside settings.json — user
-  # scope — so tab marking + session naming work in every project.
-  [ -f "$HOME/.claude/hook-session-namer.mjs" ] || { \
-    curl -fsSL "$base/assets/hook-session-namer.mjs" -o "$HOME/.claude/hook-session-namer.mjs" && \
-    chmod +x "$HOME/.claude/hook-session-namer.mjs"; }
-  [ -f "$HOME/.claude/util-my-color.mjs" ] || { \
-    curl -fsSL "$base/assets/util-my-color.mjs" -o "$HOME/.claude/util-my-color.mjs" && \
-    chmod +x "$HOME/.claude/util-my-color.mjs"; }
-
-  local claude_json="$HOME/.claude.json"
-  if [ ! -f "$claude_json" ]; then
-    curl -fsSL "$base/assets/claude.json" -o "$claude_json"
-    if [ "$OS" = "darwin" ]; then
-      local theme="light"
-      defaults read -g AppleInterfaceStyle 2>/dev/null | grep -q Dark && theme="dark"
-      local tmp; tmp=$(mktemp)
-      THEME="$theme" perl -MJSON::PP -e '
-        local $/;
-        my $j = decode_json(<STDIN>);
-        $j->{theme} = $ENV{THEME};
-        print JSON::PP->new->pretty->canonical->encode($j);
-      ' < "$claude_json" > "$tmp" && mv "$tmp" "$claude_json"
-    fi
-  fi
-
-  # Pre-trust PROJECT_DIR so the "Do you trust this folder?" prompt
-  # doesn't fire on first launch from VS Code / wherever users typically
-  # open Claude.
-  _trust_path "${PROJECT_DIR:-$HOME/Projects}"
 }
 
 # Chrome Stable + Chrome with Claude Code.app launcher.
@@ -899,6 +863,98 @@ _dock_apps_insert_at_zero() {
   /usr/libexec/PlistBuddy -c "Add :persistent-apps:0:tile-data:file-data:_CFURLStringType integer 15" "$plist" || true
   /usr/libexec/PlistBuddy -c "Add :persistent-apps:0:tile-type string file-tile" "$plist" || true
   return 0
+}
+
+# Seed Claude config files when missing; merge required keys into them
+# when present. The merge targets the exact things --check-only flags:
+# mcpServers.chrome-devtools in ~/.claude.json, plus defaultMode +
+# skipDangerousModePermissionPrompt + a session-namer hook entry in
+# ~/.claude/settings.json. Non-critical sibling files (CLAUDE.md,
+# hook-session-namer.mjs, util-my-color.mjs) stay seed-if-absent — we
+# don't second-guess user edits to those.
+#
+# Idempotent: re-running is a no-op once the file matches expectations.
+# Heals the manual-pre-n install class of breakage where the binary
+# exists, ~/.claude.json exists, but mcpServers never got registered.
+_apply_claude_config() {
+  local base="https://almostawake.com"
+  mkdir -p "$HOME/.claude"
+
+  # Sibling files — seed if absent, leave alone otherwise.
+  [ -f "$HOME/.claude/CLAUDE.md" ] || \
+    curl -fsSL "$base/assets/claude.md" -o "$HOME/.claude/CLAUDE.md"
+  [ -f "$HOME/.claude/hook-session-namer.mjs" ] || { \
+    curl -fsSL "$base/assets/hook-session-namer.mjs" -o "$HOME/.claude/hook-session-namer.mjs" && \
+    chmod +x "$HOME/.claude/hook-session-namer.mjs"; }
+  [ -f "$HOME/.claude/util-my-color.mjs" ] || { \
+    curl -fsSL "$base/assets/util-my-color.mjs" -o "$HOME/.claude/util-my-color.mjs" && \
+    chmod +x "$HOME/.claude/util-my-color.mjs"; }
+
+  # ~/.claude/settings.json — seed if absent, then merge required keys.
+  local settings="$HOME/.claude/settings.json"
+  if [ ! -f "$settings" ]; then
+    curl -fsSL "$base/assets/claude-settings.json" -o "$settings"
+  fi
+  # The merge is unconditional even right after a fresh seed: cheap,
+  # and it means "shipped asset drifted from this contract" is loud (the
+  # asset gets re-aligned to our invariants instead of silently winning).
+  local tmp; tmp=$(mktemp)
+  perl -MJSON::PP -e '
+    local $/;
+    my $j = decode_json(<STDIN>);
+    $j->{defaultMode} = "bypassPermissions";
+    $j->{skipDangerousModePermissionPrompt} = JSON::PP::true;
+    $j->{hooks} //= {};
+    $j->{hooks}{UserPromptSubmit} //= [];
+    my $cmd = q{node "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hook-session-namer.mjs"};
+    my $found = 0;
+    for my $m (@{$j->{hooks}{UserPromptSubmit}}) {
+      for my $h (@{$m->{hooks} // []}) {
+        $found = 1 if ($h->{command} // "") =~ /hook-session-namer\.mjs/;
+      }
+    }
+    unless ($found) {
+      push @{$j->{hooks}{UserPromptSubmit}}, {
+        matcher => "",
+        hooks   => [ { type => "command", command => $cmd } ],
+      };
+    }
+    print JSON::PP->new->pretty->canonical->encode($j);
+  ' < "$settings" > "$tmp" && mv "$tmp" "$settings"
+
+  # ~/.claude.json — seed if absent (with theme auto-detect), then
+  # always merge in the chrome-devtools MCP server. Trust PROJECT_DIR
+  # last so the entry appears alongside whatever else lives there.
+  local claude_json="$HOME/.claude.json"
+  if [ ! -f "$claude_json" ]; then
+    curl -fsSL "$base/assets/claude.json" -o "$claude_json"
+    local theme="light"
+    defaults read -g AppleInterfaceStyle 2>/dev/null | grep -q Dark && theme="dark"
+    tmp=$(mktemp)
+    THEME="$theme" perl -MJSON::PP -e '
+      local $/;
+      my $j = decode_json(<STDIN>);
+      $j->{theme} = $ENV{THEME};
+      print JSON::PP->new->pretty->canonical->encode($j);
+    ' < "$claude_json" > "$tmp" && mv "$tmp" "$claude_json"
+  fi
+  tmp=$(mktemp)
+  perl -MJSON::PP -e '
+    local $/;
+    my $j = decode_json(<STDIN>);
+    $j->{mcpServers} //= {};
+    $j->{mcpServers}{"chrome-devtools"} //= {};
+    # Set command + args specifically (preserves env/type/etc. that
+    # Claude Code adds when it touches the entry).
+    $j->{mcpServers}{"chrome-devtools"}{command} = "npx";
+    $j->{mcpServers}{"chrome-devtools"}{args} = ["-y", "chrome-devtools-mcp\@latest", "--browser-url=http://127.0.0.1:9222"];
+    print JSON::PP->new->pretty->canonical->encode($j);
+  ' < "$claude_json" > "$tmp" && mv "$tmp" "$claude_json"
+
+  # Pre-trust PROJECT_DIR so the "Do you trust this folder?" prompt
+  # doesn't fire on first launch from VS Code / wherever users typically
+  # open Claude. Was inside _install_claude pre-refactor.
+  _trust_path "${PROJECT_DIR:-$HOME/Projects}"
 }
 
 # Create PROJECT_DIR workspace, point Finder there, pin VS Code +
@@ -1273,23 +1329,24 @@ if [ "$CHROME_LAUNCHER_ONLY" = true ]; then
   _chrome_launcher_only_run
 fi
 
-if [ "$SKIP_SETUP" = true ]; then
-  # --skip-setup: trust that a prior run installed + configured the
+if [ "$PROJECT_ONLY" = true ]; then
+  # --project-only: trust that a prior run installed + configured the
   # machine. Detection (§4) still ran — enforce it here: bail on
   # anything missing rather than limping into a cryptic mid-provision
   # failure. No PATH export needed — a returning user invokes us via
   # the `n` alias, so their interactive shell already sourced the
-  # ~/.zshrc block. _configure_workspace / _write_zshrc are skipped.
+  # ~/.zshrc block. _apply_claude_config / _configure_workspace /
+  # _write_zshrc are skipped.
   missing=()
   for i in "${!ITEMS[@]}"; do
     [ "${INSTALLED[$i]}" = "true" ] || missing+=("${ITEMS[$i]}")
   done
   if [ "${#missing[@]}" -gt 0 ]; then
     echo ""
-    echo "✗  --skip-setup given, but these dependencies aren't installed:"
+    echo "✗  --project-only given, but these dependencies aren't installed:"
     for m in "${missing[@]}"; do echo "     - $m"; done
     echo ""
-    echo "   re-run 'n' without --skip-setup to install them first"
+    echo "   re-run 'n' without --project-only to install them first"
     echo ""
     exit 1
   fi
@@ -1322,21 +1379,24 @@ else
   [ -d "$IF_HOME/java/Contents/Home" ] && export JAVA_HOME="$IF_HOME/java/Contents/Home" && export PATH="$JAVA_HOME/bin:$PATH"
   [ -d "$IF_HOME/java/bin" ] && export JAVA_HOME="$IF_HOME/java" && export PATH="$JAVA_HOME/bin:$PATH"
 
-  # --install-only: stop here. No workspace/Dock changes, no zshrc edit,
-  # no sign-in, no clone, no provisioning. Caller wanted just the deps.
-  if [ "$INSTALL_ONLY" = true ]; then
+  # Config phase. Always runs after install (except under --project-only,
+  # which short-circuits this whole block). Silent — no per-step row,
+  # just sequenced log-redirected work. Each helper is idempotent:
+  #   _apply_claude_config  seed-if-absent + merge mcp/defaultMode/hook
+  #                         (heals manual-pre-n installs).
+  #   _configure_workspace  ~/Projects + Dock pins.
+  #   _write_zshrc          marker block, rewritten every run.
+  _apply_claude_config >> "$INSTALL_LOG" 2>&1 || true
+  _configure_workspace >> "$INSTALL_LOG" 2>&1 || true
+  _write_zshrc         >> "$INSTALL_LOG" 2>&1 || true
+
+  # --setup-only: install + config done, stop before sign-in / project
+  # creation / clone / deploy.
+  if [ "$SETUP_ONLY" = true ]; then
     echo ""
-    echo "✓  done (--install-only)"
+    echo "✓  done (--setup-only)"
     exit 0
   fi
-
-  # Silent end-steps (no row, just do the work). Idempotent.
-  _configure_workspace >> "$INSTALL_LOG" 2>&1 || true
-
-  # Always rewrite the marker block — cheap, idempotent, catches users
-  # migrating from old `i` / `setup-project` aliases that now point at
-  # dead paths.
-  _write_zshrc >> "$INSTALL_LOG" 2>&1 || true
 fi
 
 # =====================================================================

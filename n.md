@@ -42,17 +42,19 @@ All optional. Skip with no flags for the normal interactive flow.
   aren't supported. Defaults to `australia-southeast1`. Ignored when
   `--reuse-project` targets an existing project — its Firestore location
   is already fixed.
-- `--skip-setup` — assume a prior run already installed and configured
-  the machine: skip the opt-in prompt, the dependency install pass, the
-  workspace/Dock config, and the `~/.zshrc` block. Dependency detection
-  still runs — if anything is missing, `n` bails (no install attempt)
-  and tells you to re-run without the flag. For returning users
+- `--project-only` — skip the install + config phases (dependency
+  install, Claude config repair, workspace/Dock pins, `~/.zshrc` block)
+  and go straight to sign-in + project provisioning. Dependency
+  detection still runs — if anything is missing, `n` bails (no install
+  attempt) and tells you to re-run without the flag. For returning users
   spinning up another project on an already-set-up machine.
-- `--install-only` — run dependency install only. Skips the
-  workspace/Dock config, the `~/.zshrc` block, sign-in, project
-  creation, clone — everything past the install row UI. For setting up
-  a machine without provisioning a project. Mutually exclusive with
-  `--skip-setup`.
+- `--setup-only` — run install + config and stop. Skips sign-in, project
+  creation, clone, deploy. The config phase seeds missing Claude files
+  and merges required keys (`mcpServers.chrome-devtools`, `defaultMode`,
+  `skipDangerousModePermissionPrompt`, session-namer hook) into
+  existing files without clobbering user additions. For setting up a
+  machine + healing config without provisioning a project. Mutually
+  exclusive with `--project-only`.
 - `--chrome-launcher-only` — dedicated rebuild path for the
   Chrome-with-Claude launcher. Wipes any existing
   `Chrome with Claude Code.app` from `/Applications` and `~/Applications`
@@ -60,6 +62,9 @@ All optional. Skip with no flags for the normal interactive flow.
   its Dock entries, then rebuilds the launcher in `~/Applications` and
   re-pins to the Dock. Refuses to build if Google Chrome itself isn't
   installed. Does nothing else — no deps, no config, no cloud.
+- `--check-only` — read-only diagnostic. Prints install state for each
+  dependency plus a config block (Chrome launcher integrity, Claude
+  config keys). No writes. Exits 1 if any check fails.
 
 If `n` is invoked from inside a directory that already contains a
 `.env.auth.json` (e.g. spinning up a sibling project from an
