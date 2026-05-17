@@ -1051,6 +1051,33 @@ _rebuild_chrome_launcher() {
   _build_chrome_launcher "$chrome_app"
 }
 
+# Force-kill any running Chrome (browser + helpers) for the current
+# user, then wait until they're gone. Defensive call before the
+# sign-in browser flow: port 9222 is a global resource, and if
+# anything else (Claude Code CLI's own internal Chrome on the
+# "Claude Code CLI" profile, a stale instance from a prior run, or
+# the user's daily-driver Chrome) is holding it, our launcher's
+# Chrome silently falls back to a random port → DevToolsActivePort
+# points at the wrong browser → chrome-devtools MCP wires to the
+# wrong window. See aa/CLAUDE.md "Chrome launcher" rules.
+#
+# Matches the full executable path (not killall by name) so helpers
+# (Renderer / GPU / Helper) get caught too. Scoped to current user
+# so we don't touch other accounts on multi-user machines. Skip
+# osascript "tell to quit" — it triggers a TCC prompt on fresh
+# accounts and spawns Chrome when nothing was running.
+_kill_all_chrome() {
+  [ "$OS" = "darwin" ] || return 0
+  local match='Google Chrome.app/Contents/MacOS/Google Chrome'
+  pgrep -U "$(id -u)" -f "$match" >/dev/null 2>&1 || return 0
+  pkill -9 -U "$(id -u)" -f "$match" 2>/dev/null || true
+  local i
+  for i in $(seq 1 20); do
+    pgrep -U "$(id -u)" -f "$match" >/dev/null 2>&1 || return 0
+    sleep 0.5
+  done
+}
+
 # Run every check --check-only verifies and every fix --install-only
 # applies. Prints rows as they run, sets the global $CHECK_FAILS, and
 # returns 0 / 1. Shared by --check-only and the --project-only gate
@@ -2175,6 +2202,14 @@ _prov_signin() {
   # No section / no inline message. Browser pops up over the terminal
   # so the user already knows what to do. Row sits at "running"
   # (--->) until cmd-auth returns; then orchestrator flips it to ✓.
+  #
+  # Defensive Chrome kill BEFORE cmd-auth.mjs spawns the browser:
+  # frees port 9222 so our launcher's Chrome can actually bind it and
+  # DevToolsActivePort lands on the right websocket. Always runs even
+  # if cmd-auth ends up reusing a cached cred and skipping the browser
+  # — cheap, and means a stale Chrome-Claude from a prior session
+  # doesn't keep hogging the port.
+  _kill_all_chrome >> "$INSTALL_LOG" 2>&1 || true
   local rc=0
   ( cd "$IF_HOME" && node cmd-auth.mjs ) >> "$INSTALL_LOG" 2>&1 || rc=$?
   if [ "$rc" -ne 0 ]; then return 1; fi
