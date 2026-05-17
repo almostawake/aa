@@ -1314,9 +1314,12 @@ _write_zshrc() {
     printf 'export JAVA_HOME="%s"\n' "$jh_value"
     printf 'export PATH="$JAVA_HOME/bin:$PATH"\n'
     printf 'export NPM_CONFIG_CACHE="$HOME/.if/npm-cache"\n'
-    # Where new projects created by `n` go. Override per machine
-    # (e.g. ~/_code) by editing the line in ~/.zshrc after install.
-    printf 'export PROJECT_DIR="$HOME/Projects"\n'
+    # PROJECT_DIR is deliberately NOT exported here. n falls back to
+    # $HOME/Projects when the env var is unset; to override per machine
+    # (e.g. ~/_code), set `export PROJECT_DIR=...` somewhere OUTSIDE
+    # this marker block — anywhere in ~/.zshrc, ~/.zshenv, or a profile
+    # fragment — and it'll survive re-runs (this block is rewritten on
+    # every n install pass and would clobber any value put here).
     # Stop Claude Code auto-installing its VS Code extension when launched
     # from a VS Code terminal (we install our own VS Code with extensions baked in).
     printf 'export CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1\n'
