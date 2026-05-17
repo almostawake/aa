@@ -194,20 +194,12 @@ chrome_open() {
 }
 
 # =====================================================================
-# 2. LOGGING + EXIT TRAP
+# 2. LOGGING
 # =====================================================================
 
 log()       { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*" >> "$INSTALL_LOG"; }
 http_log()  { printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*" >> "$HTTP_LOG"; }
 log_trunc() { printf '%s' "$1" | tr '\n' ' ' | cut -c1-1000; }
-
-# Surface log tail on abnormal exit — the only way to tell where we hung
-# when the row UI just shows a spinner.
-trap '_rc=$?; if [ $_rc -ne 0 ]; then
-  printf "\n\n--- last 40 lines of %s ---\n" "$INSTALL_LOG" >&2
-  tail -n 40 "$INSTALL_LOG" >&2
-  printf "\n(full log: %s)\n" "$INSTALL_LOG" >&2
-fi' EXIT
 
 log "n: script start (pid=$$, user=$USER, shell=$SHELL)"
 log "n: HOME=$HOME IF_HOME=$IF_HOME"
@@ -973,7 +965,6 @@ _chrome_launcher_only_run() {
 
   echo ""
   echo "✓  done"
-  trap - EXIT
   exit 0
 }
 
@@ -1084,10 +1075,9 @@ run_install() {
     update_row "$i" "failed"
     echo ""
     echo ""
-    echo "✗  install of ${ITEMS[$i]} failed — see $INSTALL_LOG for details"
+    echo "✗  install of ${ITEMS[$i]} failed"
     echo ""
     echo ""
-    trap - EXIT
     exit 1
   fi
 }
@@ -1116,7 +1106,6 @@ if [ "$SKIP_SETUP" = true ]; then
     echo ""
     echo "   re-run 'n' without --skip-setup to install them first"
     echo ""
-    trap - EXIT
     exit 1
   fi
 else
@@ -1153,7 +1142,6 @@ else
   if [ "$INSTALL_ONLY" = true ]; then
     echo ""
     echo "✓  done (--install-only)"
-    trap - EXIT
     exit 0
   fi
 
@@ -1497,13 +1485,13 @@ add_firebase() {
     return 1
   fi
   if [ "$code" != "200" ]; then
-    ADD_FIREBASE_FATAL_MSG="addFirebase failed with HTTP $code — see $HTTP_LOG"
+    ADD_FIREBASE_FATAL_MSG="addFirebase failed with HTTP $code"
     return 1
   fi
   local op_name; op_name=$(op_name_from "$body")
   http_log "add_firebase $pid op_name='$op_name'"
   if [ -z "$op_name" ]; then
-    ADD_FIREBASE_FATAL_MSG="addFirebase returned no op name — see $HTTP_LOG"
+    ADD_FIREBASE_FATAL_MSG="addFirebase returned no op name"
     return 1
   fi
   X_GOOG_USER_PROJECT="$pid" wait_for_op "https://firebase.googleapis.com/v1beta1/$op_name" 120
@@ -2067,15 +2055,13 @@ provision_all() {
         elif [ -n "$ADD_FIREBASE_FATAL_MSG" ]; then
           echo "✗  $ADD_FIREBASE_FATAL_MSG"
         else
-          echo "✗  failed to add firebase — see $HTTP_LOG for details"
+          echo "✗  failed to add firebase"
         fi
       else
-        echo "✗  $fn failed — see $HTTP_LOG for details"
+        echo "✗  $fn failed"
       fi
       echo ""
       echo ""
-      # Clean message already shown — suppress the EXIT-trap log dump.
-      trap - EXIT
       exit 1
     fi
   done
@@ -2342,10 +2328,9 @@ deploy_all() {
       update_dep_row "$i" "failed"
       echo ""
       echo ""
-      echo "✗  ${DEPLOY_PENDING[$i]} failed — see $HTTP_LOG for details"
+      echo "✗  ${DEPLOY_PENDING[$i]} failed"
       echo ""
       echo ""
-      trap - EXIT
       exit 1
     fi
   done
@@ -2359,9 +2344,6 @@ deploy_all
 # =====================================================================
 # 14. PROJECT READY
 # =====================================================================
-
-# Clear EXIT trap on success — no need to dump the log.
-trap - EXIT
 
 echo ""
 printf "your template project is live at https://%s.web.app\n" "$PID"
