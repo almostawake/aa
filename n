@@ -81,15 +81,20 @@ die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 #                         rather than limp into a cryptic mid-provision
 #                         failure. For returning users spinning up their
 #                         Nth project on an already-set-up machine.
-#   --setup-only          run install + config and stop. Skips sign-in,
-#                         project creation, clone, deploy. Config phase
-#                         seeds missing Claude files and merges required
-#                         keys (mcpServers.chrome-devtools, defaultMode,
+#   --install-only        run install + config and stop. Skips sign-in,
+#                         project creation, clone, deploy. Install phase
+#                         force-rebuilds the Chrome wrapper + Dock entry
+#                         (deleting any pre-existing /Applications or
+#                         ~/Applications variants) on every run, so
+#                         stale launchers from manual/legacy installs
+#                         get healed. Config phase seeds missing Claude
+#                         files and merges required keys
+#                         (mcpServers.chrome-devtools, defaultMode,
 #                         skipDangerousModePermissionPrompt, session-
 #                         namer hook) into existing files without
 #                         clobbering user additions. For setting up a
-#                         machine + healing config without provisioning
-#                         a project.
+#                         machine + healing wrapper/config without
+#                         provisioning a project.
 #   --chrome-launcher-only
 #                         dedicated rebuild path for the Chrome-with-
 #                         Claude launcher: nuke any existing launcher
@@ -117,7 +122,7 @@ die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 #                         account, or when you accept the side effects.
 REUSE_PROJECT_ID=""
 PROJECT_ONLY=false
-SETUP_ONLY=false
+INSTALL_ONLY=false
 CHROME_LAUNCHER_ONLY=false
 CHECK_ONLY=false
 OVERRIDE_OSX_USER_CHECK=false
@@ -135,7 +140,7 @@ while [ "$#" -gt 0 ]; do
                        REGION="$2"; shift 2 ;;
     --region=*)        REGION="${1#*=}"; shift ;;
     --project-only)    PROJECT_ONLY=true; shift ;;
-    --setup-only)      SETUP_ONLY=true; shift ;;
+    --install-only)      INSTALL_ONLY=true; shift ;;
     --chrome-launcher-only) CHROME_LAUNCHER_ONLY=true; shift ;;
     --check-only) CHECK_ONLY=true; shift ;;
     --override-osx-user-check) OVERRIDE_OSX_USER_CHECK=true; shift ;;
@@ -143,8 +148,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-[ "$SETUP_ONLY" = true ] && [ "$PROJECT_ONLY" = true ] && \
-  die "--setup-only and --project-only are mutually exclusive (one does install + config, the other skips both)"
+[ "$INSTALL_ONLY" = true ] && [ "$PROJECT_ONLY" = true ] && \
+  die "--install-only and --project-only are mutually exclusive (one does install + config, the other skips both)"
 
 # Firestore + Storage + Functions all land in $REGION, so it must be a single
 # GCP region (e.g. australia-southeast1, us-central1) — Functions can't deploy
@@ -335,16 +340,14 @@ if   [ -x "$IF_HOME/claude/bin/claude" ]; then have_claude=true
 elif command -v claude >/dev/null 2>&1;   then have_claude=true
 fi
 
-# Chrome row represents Chrome.app + Claude-connected launcher together —
-# only "installed" when both exist.
+# Chrome row reflects Google Chrome.app only. The Claude-connected
+# launcher (Chrome with Claude Code.app) is force-rebuilt in the
+# install pass regardless of detection, so it doesn't gate the row.
 have_chrome=false
-if [ "$OS" = "darwin" ]; then
-  if { [ -d "$HOME/Applications/Chrome with Claude Code.app" ] || \
-       [ -d "/Applications/Chrome with Claude Code.app" ]; } && \
-     { [ -d "$HOME/Applications/Google Chrome.app" ] || \
-       [ -d "/Applications/Google Chrome.app" ]; }; then
-    have_chrome=true
-  fi
+if [ "$OS" = "darwin" ] && \
+   { [ -d "$HOME/Applications/Google Chrome.app" ] || \
+     [ -d "/Applications/Google Chrome.app" ]; }; then
+  have_chrome=true
 fi
 
 have_vscode=false
@@ -359,7 +362,7 @@ log "n: detection — git=$have_git gh=$have_gh jq=$have_jq node22=$have_node22 
 # Drive welcome / install-section visibility off this. Re-runs (everything
 # already installed) skip welcome + install rows + configure entirely and
 # go straight to project setup.
-ITEMS=("git" "gh" "jq" "node 22" "java 21" "claude code [in YOLO mode]" "chrome [connected to Claude]" "vscode")
+ITEMS=("git" "gh" "jq" "node 22" "java 21" "claude code [in YOLO mode]" "chrome" "vscode")
 INSTALL_FNS=("_install_git" "_install_gh" "_install_jq" "_install_node" "_install_java" "_install_claude" "_install_chrome" "_install_vscode")
 INSTALLED=("$have_git" "$have_gh" "$have_jq" "$have_node22" "$have_java21" "$have_claude" "$have_chrome" "$have_vscode")
 N=${#ITEMS[@]}
@@ -602,64 +605,64 @@ _install_claude() {
   npm install --prefix "$IF_HOME/claude" -g @anthropic-ai/claude-code
 }
 
-# Chrome Stable + Chrome with Claude Code.app launcher.
+# Google Chrome.app only. The Chrome with Claude Code.app launcher is
+# rebuilt by _rebuild_chrome_launcher in the install pass (always,
+# regardless of detection) so we don't touch it here.
 _install_chrome() {
   _log() { echo "[$(date +%H:%M:%S)] chrome: $*"; }
   _log "start"
   [ "$OS" = "darwin" ] || { _log "not darwin, skipping"; return 0; }
 
-  # 1. Install Chrome.app (skip if already present anywhere)
   local chrome_app=""
   [ -d "/Applications/Google Chrome.app" ]      && chrome_app="/Applications/Google Chrome.app"
   [ -d "$HOME/Applications/Google Chrome.app" ] && chrome_app="$HOME/Applications/Google Chrome.app"
   _log "existing chrome_app = [$chrome_app]"
 
-  if [ -z "$chrome_app" ]; then
-    local dmg; dmg=$(mktemp -u).dmg
-    local mountpoint
-    _log "downloading Chrome DMG to $dmg (~200MB)…"
-    if ! curl -fSL --progress-bar \
-         "https://dl.google.com/chrome/mac/universal/stable/GGRO/googlechrome.dmg" \
-         -o "$dmg"; then
-      _log "curl failed: exit=$?"
-      rm -f "$dmg"
-      return 1
-    fi
-    _log "DMG size: $(ls -la "$dmg" | awk '{print $5}') bytes"
-
-    _log "hdiutil attach…"
-    local attach_out
-    attach_out=$(hdiutil attach "$dmg" -nobrowse -noverify -noautoopen 2>&1)
-    _log "hdiutil output:"
-    printf '%s\n' "$attach_out" | sed 's/^/    /'
-    mountpoint=$(printf '%s' "$attach_out" \
-      | awk '/\/Volumes\// { for (i=3; i<=NF; i++) printf "%s ", $i; print "" }' \
-      | sed 's/ *$//' | head -1)
-    _log "parsed mountpoint = [$mountpoint]"
-
-    if [ -z "$mountpoint" ] || [ ! -d "$mountpoint/Google Chrome.app" ]; then
-      _log "mount FAILED — mountpoint empty or Google Chrome.app missing at [$mountpoint]"
-      [ -n "$mountpoint" ] && hdiutil detach "$mountpoint" -force -quiet 2>/dev/null || true
-      rm -f "$dmg"
-      return 1
-    fi
-
-    mkdir -p "$HOME/Applications"
-    rm -rf "$HOME/Applications/Google Chrome.app"
-    _log "cp Chrome.app from $mountpoint to ~/Applications/"
-    cp -R "$mountpoint/Google Chrome.app" "$HOME/Applications/"
-    xattr -dr com.apple.quarantine "$HOME/Applications/Google Chrome.app" 2>/dev/null || true
-    _log "detaching DMG"
-    hdiutil detach "$mountpoint" -quiet 2>/dev/null \
-      || hdiutil detach "$mountpoint" -force -quiet 2>/dev/null \
-      || true
-    rm -f "$dmg"
-    chrome_app="$HOME/Applications/Google Chrome.app"
-    _log "chrome_app now = $chrome_app"
+  if [ -n "$chrome_app" ]; then
+    _log "Chrome.app already installed at $chrome_app, skipping download"
+    return 0
   fi
 
-  # 2. Build/rebuild the launcher (always, so flag changes take effect on re-runs).
-  _build_chrome_launcher "$chrome_app"
+  local dmg; dmg=$(mktemp -u).dmg
+  local mountpoint
+  _log "downloading Chrome DMG to $dmg (~200MB)…"
+  if ! curl -fSL --progress-bar \
+       "https://dl.google.com/chrome/mac/universal/stable/GGRO/googlechrome.dmg" \
+       -o "$dmg"; then
+    _log "curl failed: exit=$?"
+    rm -f "$dmg"
+    return 1
+  fi
+  _log "DMG size: $(ls -la "$dmg" | awk '{print $5}') bytes"
+
+  _log "hdiutil attach…"
+  local attach_out
+  attach_out=$(hdiutil attach "$dmg" -nobrowse -noverify -noautoopen 2>&1)
+  _log "hdiutil output:"
+  printf '%s\n' "$attach_out" | sed 's/^/    /'
+  mountpoint=$(printf '%s' "$attach_out" \
+    | awk '/\/Volumes\// { for (i=3; i<=NF; i++) printf "%s ", $i; print "" }' \
+    | sed 's/ *$//' | head -1)
+  _log "parsed mountpoint = [$mountpoint]"
+
+  if [ -z "$mountpoint" ] || [ ! -d "$mountpoint/Google Chrome.app" ]; then
+    _log "mount FAILED — mountpoint empty or Google Chrome.app missing at [$mountpoint]"
+    [ -n "$mountpoint" ] && hdiutil detach "$mountpoint" -force -quiet 2>/dev/null || true
+    rm -f "$dmg"
+    return 1
+  fi
+
+  mkdir -p "$HOME/Applications"
+  rm -rf "$HOME/Applications/Google Chrome.app"
+  _log "cp Chrome.app from $mountpoint to ~/Applications/"
+  cp -R "$mountpoint/Google Chrome.app" "$HOME/Applications/"
+  xattr -dr com.apple.quarantine "$HOME/Applications/Google Chrome.app" 2>/dev/null || true
+  _log "detaching DMG"
+  hdiutil detach "$mountpoint" -quiet 2>/dev/null \
+    || hdiutil detach "$mountpoint" -force -quiet 2>/dev/null \
+    || true
+  rm -f "$dmg"
+  _log "Chrome.app installed at $HOME/Applications/Google Chrome.app"
 }
 
 # Build (or rebuild) ~/Applications/Chrome with Claude Code.app — the
@@ -976,14 +979,17 @@ _configure_workspace() {
   # Prepend in reverse order so final L-R is [vscode, chrome, ...rest].
   # We don't strip the user's existing Dock items — they keep what they
   # had, we just add ours to the front.
-  # Also remove legacy URLs (IF Terminal applet, shell.command) so
-  # upgrading installs don't leave a stale Dock entry.
+  # Also remove legacy URLs (IF Terminal applet, shell.command, and the
+  # /Applications-rooted Chrome launcher path from pre-n manual installs)
+  # so upgrading installs don't leave a stale Dock entry.
   local url_vscode="file://$HOME/Applications/Visual%20Studio%20Code.app/"
   local url_chrome="file://$HOME/Applications/Chrome%20with%20Claude%20Code.app/"
+  local url_chrome_legacy="file:///Applications/Chrome%20with%20Claude%20Code.app/"
   local url_term_legacy="file://$HOME/Applications/IF%20Terminal.app/"
   local url_shell_legacy="file://$HOME/.if/bin/shell.command"
   _dock_apps_remove_url "$url_vscode"
   _dock_apps_remove_url "$url_chrome"
+  _dock_apps_remove_url "$url_chrome_legacy"
   _dock_apps_remove_url "$url_term_legacy"
   _dock_apps_remove_url "$url_shell_legacy"
   _dock_apps_insert_at_zero "$url_chrome"
@@ -995,26 +1001,32 @@ _configure_workspace() {
   killall Dock 2>/dev/null || true
 }
 
-# Dedicated entrypoint for --chrome-launcher-only. Wipes any existing
-# launcher .app from /Applications + ~/Applications, strips its Dock
-# entries, then rebuilds in ~/Applications and re-pins. Refuses to
-# build against a missing Google Chrome.app rather than producing a
-# launcher that hardcodes a path to nothing.
-_chrome_launcher_only_run() {
-  [ "$OS" = "darwin" ] || die "--chrome-launcher-only is macOS-only"
+# Force the Chrome launcher to a known-good state. Deletes any
+# Chrome with Claude Code.app from BOTH /Applications and ~/Applications,
+# strips Dock entries pointing at either location, then rebuilds fresh
+# in ~/Applications. Refuses if Google Chrome.app isn't installed (the
+# launcher hardcodes its path) or if a /Applications launcher exists
+# but can't be removed without admin (caller is told to sudo + re-run).
+#
+# Does NOT pin to the Dock — caller decides. _chrome_launcher_only_run
+# pins + killall after; the install pass lets _configure_workspace do
+# its standard pin (slot 0, alongside VS Code) so the Dock layout
+# matches a fresh install.
+#
+# Called by:
+#   - every install pass (so legacy /Applications launchers + stale
+#     bashes from manual installs get healed on the next n run)
+#   - --chrome-launcher-only (which adds the pin + Dock kick itself)
+_rebuild_chrome_launcher() {
+  [ "$OS" = "darwin" ] || return 0
 
   local chrome_app=""
   [ -d "/Applications/Google Chrome.app" ]      && chrome_app="/Applications/Google Chrome.app"
   [ -d "$HOME/Applications/Google Chrome.app" ] && chrome_app="$HOME/Applications/Google Chrome.app"
-  [ -z "$chrome_app" ] && die "Google Chrome not installed in /Applications or ~/Applications — install Chrome first, then re-run"
+  [ -z "$chrome_app" ] && die "Google Chrome not installed in /Applications or ~/Applications — can't rebuild launcher"
 
-  echo ""
-  echo "rebuilding Chrome launcher"
-  echo ""
-
-  # Delete any existing launcher from both standard locations.
-  # /Applications writes need admin — fail fast with a sudo hint
-  # rather than half-completing.
+  # /Applications writes need admin — fail fast with a sudo hint rather
+  # than half-completing.
   local p
   for p in "/Applications/Chrome with Claude Code.app" \
            "$HOME/Applications/Chrome with Claude Code.app"; do
@@ -1022,16 +1034,26 @@ _chrome_launcher_only_run() {
       if ! rm -rf "$p" 2>/dev/null; then
         die "couldn't delete $p — needs admin. try: sudo rm -rf '$p' then re-run"
       fi
-      echo "✓  removed $p"
     fi
   done
 
-  # Strip Dock entries pointing at either launcher location, then
-  # rebuild + re-pin in ~/Applications.
   _dock_apps_remove_url "file://$HOME/Applications/Chrome%20with%20Claude%20Code.app/"
   _dock_apps_remove_url "file:///Applications/Chrome%20with%20Claude%20Code.app/"
 
   _build_chrome_launcher "$chrome_app"
+}
+
+# Dedicated entrypoint for --chrome-launcher-only. Same work as the
+# in-pass rebuild above, but adds its own Dock pin + Dock kick + exit
+# so the standalone flag does the whole loop end-to-end.
+_chrome_launcher_only_run() {
+  [ "$OS" = "darwin" ] || die "--chrome-launcher-only is macOS-only"
+
+  echo ""
+  echo "rebuilding Chrome launcher"
+  echo ""
+
+  _rebuild_chrome_launcher
   echo "✓  rebuilt $HOME/Applications/Chrome with Claude Code.app"
 
   _dock_apps_insert_at_zero "file://$HOME/Applications/Chrome%20with%20Claude%20Code.app/"
@@ -1379,22 +1401,33 @@ else
   [ -d "$IF_HOME/java/Contents/Home" ] && export JAVA_HOME="$IF_HOME/java/Contents/Home" && export PATH="$JAVA_HOME/bin:$PATH"
   [ -d "$IF_HOME/java/bin" ] && export JAVA_HOME="$IF_HOME/java" && export PATH="$JAVA_HOME/bin:$PATH"
 
+  # Force-rebuild the Chrome launcher every install pass. Wipes any
+  # legacy /Applications variant + the user-local one, rebuilds fresh
+  # in ~/Applications. NOT gated on have_chrome (which only checks
+  # Chrome.app) so a re-run heals stale launchers from manual installs.
+  # Bare call — its only failure mode is `die` (no Chrome.app, or
+  # /Applications needs sudo), and we want the die message on the
+  # terminal not buried in the log. Pinning is left to
+  # _configure_workspace below.
+  _rebuild_chrome_launcher
+
   # Config phase. Always runs after install (except under --project-only,
   # which short-circuits this whole block). Silent — no per-step row,
   # just sequenced log-redirected work. Each helper is idempotent:
   #   _apply_claude_config  seed-if-absent + merge mcp/defaultMode/hook
   #                         (heals manual-pre-n installs).
-  #   _configure_workspace  ~/Projects + Dock pins.
+  #   _configure_workspace  ~/Projects + Dock pins (re-pins the fresh
+  #                         launcher, strips legacy /Applications URL).
   #   _write_zshrc          marker block, rewritten every run.
   _apply_claude_config >> "$INSTALL_LOG" 2>&1 || true
   _configure_workspace >> "$INSTALL_LOG" 2>&1 || true
   _write_zshrc         >> "$INSTALL_LOG" 2>&1 || true
 
-  # --setup-only: install + config done, stop before sign-in / project
+  # --install-only: install + config done, stop before sign-in / project
   # creation / clone / deploy.
-  if [ "$SETUP_ONLY" = true ]; then
+  if [ "$INSTALL_ONLY" = true ]; then
     echo ""
-    echo "✓  done (--setup-only)"
+    echo "✓  done (--install-only)"
     exit 0
   fi
 fi

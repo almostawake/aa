@@ -48,13 +48,16 @@ All optional. Skip with no flags for the normal interactive flow.
   detection still runs — if anything is missing, `n` bails (no install
   attempt) and tells you to re-run without the flag. For returning users
   spinning up another project on an already-set-up machine.
-- `--setup-only` — run install + config and stop. Skips sign-in, project
-  creation, clone, deploy. The config phase seeds missing Claude files
-  and merges required keys (`mcpServers.chrome-devtools`, `defaultMode`,
-  `skipDangerousModePermissionPrompt`, session-namer hook) into
-  existing files without clobbering user additions. For setting up a
-  machine + healing config without provisioning a project. Mutually
-  exclusive with `--project-only`.
+- `--install-only` — run install + config and stop. Skips sign-in,
+  project creation, clone, deploy. Install phase force-rebuilds the
+  Chrome wrapper + Dock entry on every run (deleting any pre-existing
+  `/Applications` or `~/Applications` variants), so stale launchers
+  from manual / legacy installs get healed. Config phase seeds missing
+  Claude files and merges required keys (`mcpServers.chrome-devtools`,
+  `defaultMode`, `skipDangerousModePermissionPrompt`, session-namer
+  hook) into existing files without clobbering user additions. For
+  setting up a machine + healing wrapper/config without provisioning
+  a project. Mutually exclusive with `--project-only`.
 - `--chrome-launcher-only` — dedicated rebuild path for the
   Chrome-with-Claude launcher. Wipes any existing
   `Chrome with Claude Code.app` from `/Applications` and `~/Applications`
