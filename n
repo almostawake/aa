@@ -93,6 +93,16 @@ die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 #                         strip its Dock entries, then rebuild in
 #                         ~/Applications and re-pin to the Dock. Does
 #                         nothing else — no deps, no config, no cloud.
+#   --check-only          read-only diagnostic. Prints install state for
+#                         every dependency (same probes n uses) plus a
+#                         second block of config checks against the
+#                         Chrome-with-Claude launcher and Claude config
+#                         (mcpServers.chrome-devtools in ~/.claude.json,
+#                         defaultMode/skipDangerousModePermissionPrompt/
+#                         session-namer hook in ~/.claude/settings.json).
+#                         No writes, no network, no prompts. Lists every
+#                         mismatch; exits 1 if any check fails, 0 if all
+#                         pass.
 #   --override-osx-user-check
 #                         bypass the macOS-user guard (see below). n
 #                         normally refuses to run unless the current
@@ -105,6 +115,7 @@ REUSE_PROJECT_ID=""
 SKIP_SETUP=false
 INSTALL_ONLY=false
 CHROME_LAUNCHER_ONLY=false
+CHECK_ONLY=false
 OVERRIDE_OSX_USER_CHECK=false
 REGION="australia-southeast1"
 # Any flag passed (--region, --reuse-project, --skip-setup, etc.) means
@@ -122,6 +133,7 @@ while [ "$#" -gt 0 ]; do
     --skip-setup)      SKIP_SETUP=true; shift ;;
     --install-only)    INSTALL_ONLY=true; shift ;;
     --chrome-launcher-only) CHROME_LAUNCHER_ONLY=true; shift ;;
+    --check-only) CHECK_ONLY=true; shift ;;
     --override-osx-user-check) OVERRIDE_OSX_USER_CHECK=true; shift ;;
     *) die "unknown argument: $1" ;;
   esac
@@ -974,6 +986,166 @@ _chrome_launcher_only_run() {
   exit 0
 }
 
+# Read-only diagnostic entrypoint for --check-only. Prints install
+# state for every dependency (reuses §4's INSTALLED[] probes) plus a
+# config-drift block covering the Chrome launcher bash + Info.plist
+# and the two Claude config files. Every check is reported (no early
+# exit on first failure) so the user gets a full punch list. Exits 1
+# if any check failed, 0 if all passed.
+#
+# Marker-based — not byte-for-byte. The launcher bash gets a per-
+# install Chrome path baked in (varies between users), so checking
+# for the expected flags + Chrome-Claude profile + a working hardcoded
+# Chrome path catches the failure modes ("old variant with wrong
+# bundle id", "missing --remote-debugging-port", "Chrome.app moved")
+# without false-positiving on path differences.
+_check_only_run() {
+  local fails=0
+  local pass_row fail_row
+  pass_row() { printf '✓     %s\n' "$1"; }
+  fail_row() { printf '✗     %s\n' "$1"; fails=$((fails + 1)); }
+
+  echo ""
+  echo "install"
+  echo ""
+  local i
+  for i in $(seq 0 $((N - 1))); do
+    if [ "${INSTALLED[$i]}" = "true" ]; then
+      pass_row "${ITEMS[$i]}"
+    else
+      fail_row "${ITEMS[$i]} (not installed)"
+    fi
+  done
+
+  echo ""
+  echo "config — chrome launcher"
+  echo ""
+  local launcher_user="$HOME/Applications/Chrome with Claude Code.app"
+  local launcher_sys="/Applications/Chrome with Claude Code.app"
+  local launcher_bash="$launcher_user/Contents/MacOS/Chrome with Claude Code"
+  local launcher_plist="$launcher_user/Contents/Info.plist"
+
+  if [ -d "$launcher_user" ]; then
+    pass_row "launcher .app present in ~/Applications"
+  else
+    fail_row "launcher .app missing from ~/Applications (run: n --chrome-launcher-only)"
+  fi
+
+  if [ ! -d "$launcher_sys" ]; then
+    pass_row "no legacy launcher in /Applications"
+  else
+    fail_row "legacy launcher in /Applications (delete: sudo rm -rf '$launcher_sys')"
+  fi
+
+  if [ -f "$launcher_plist" ] && grep -q 'com.almostawake.if.chrome-claude-code' "$launcher_plist"; then
+    pass_row "launcher Info.plist bundle id is com.almostawake.if.chrome-claude-code"
+  elif [ -f "$launcher_plist" ]; then
+    fail_row "launcher Info.plist has wrong bundle id (expected com.almostawake.if.chrome-claude-code)"
+  else
+    fail_row "launcher Info.plist missing"
+  fi
+
+  if [ -x "$launcher_bash" ]; then
+    local marker missing=""
+    for marker in '--remote-debugging-port=9222' '--silent-debugger-extension-api' '--no-first-run' 'Chrome-Claude' 'localhost:9222' 'DevToolsActivePort'; do
+      grep -qF -- "$marker" "$launcher_bash" || missing="$missing $marker"
+    done
+    if [ -z "$missing" ]; then
+      pass_row "launcher bash has all required markers"
+    else
+      fail_row "launcher bash missing markers:$missing"
+    fi
+
+    # Hardcoded Chrome path inside the bash must point at a real Chrome.app.
+    local chrome_path
+    chrome_path=$(grep -oE '"[^"]*\.app/Contents/MacOS/Google Chrome"' "$launcher_bash" | head -1 | tr -d '"')
+    if [ -n "$chrome_path" ] && [ -x "$chrome_path" ]; then
+      pass_row "launcher Chrome path resolves: $chrome_path"
+    elif [ -n "$chrome_path" ]; then
+      fail_row "launcher Chrome path broken: $chrome_path does not exist"
+    else
+      fail_row "launcher bash has no hardcoded Chrome.app path (expected \"...Google Chrome.app/Contents/MacOS/Google Chrome\")"
+    fi
+  else
+    fail_row "launcher bash missing or not executable at $launcher_bash"
+  fi
+
+  echo ""
+  echo "config — claude"
+  echo ""
+  local claude_json="$HOME/.claude.json"
+  if [ ! -f "$claude_json" ]; then
+    fail_row "~/.claude.json missing (run n)"
+  else
+    local mcp_status
+    mcp_status=$(perl -MJSON::PP -e '
+      eval {
+        my $j = decode_json(do { local $/; <STDIN> });
+        my $mcp = $j->{mcpServers}{"chrome-devtools"};
+        die "missing mcpServers.chrome-devtools entry\n" unless $mcp;
+        my @bad;
+        push @bad, "command != npx" unless ($mcp->{command} // "") eq "npx";
+        my $args = $mcp->{args} // [];
+        my @expected = ("-y", "chrome-devtools-mcp\@latest", "--browser-url=http://127.0.0.1:9222");
+        if (ref($args) ne "ARRAY" || @$args != @expected) {
+          push @bad, "args length mismatch (got " . (ref($args) eq "ARRAY" ? scalar(@$args) : "non-array") . ", expected " . scalar(@expected) . ")";
+        } else {
+          for (my $k = 0; $k < @expected; $k++) {
+            push @bad, "args[$k] = \"$args->[$k]\" (expected \"$expected[$k]\")" if $args->[$k] ne $expected[$k];
+          }
+        }
+        if (@bad) { print join("; ", @bad); } else { print "ok"; }
+        1;
+      } or do { my $e = $@; chomp $e; print "parse error: $e"; };
+    ' < "$claude_json")
+    if [ "$mcp_status" = "ok" ]; then
+      pass_row "~/.claude.json mcpServers.chrome-devtools matches expected"
+    else
+      fail_row "~/.claude.json mcpServers.chrome-devtools: $mcp_status"
+    fi
+  fi
+
+  local claude_settings="$HOME/.claude/settings.json"
+  if [ ! -f "$claude_settings" ]; then
+    fail_row "~/.claude/settings.json missing (run n)"
+  else
+    local settings_status
+    settings_status=$(perl -MJSON::PP -e '
+      eval {
+        my $j = decode_json(do { local $/; <STDIN> });
+        my @bad;
+        push @bad, "defaultMode = \"" . ($j->{defaultMode} // "<unset>") . "\" (expected \"bypassPermissions\")"
+          unless ($j->{defaultMode} // "") eq "bypassPermissions";
+        push @bad, "skipDangerousModePermissionPrompt is not true"
+          unless $j->{skipDangerousModePermissionPrompt};
+        my $hook_ok = 0;
+        for my $m (@{$j->{hooks}{UserPromptSubmit} // []}) {
+          for my $h (@{$m->{hooks} // []}) {
+            $hook_ok = 1 if ($h->{command} // "") =~ /hook-session-namer\.mjs/;
+          }
+        }
+        push @bad, "session-namer hook missing from hooks.UserPromptSubmit" unless $hook_ok;
+        if (@bad) { print join("; ", @bad); } else { print "ok"; }
+        1;
+      } or do { my $e = $@; chomp $e; print "parse error: $e"; };
+    ' < "$claude_settings")
+    if [ "$settings_status" = "ok" ]; then
+      pass_row "~/.claude/settings.json has defaultMode + skipDangerousModePermissionPrompt + session-namer hook"
+    else
+      fail_row "~/.claude/settings.json: $settings_status"
+    fi
+  fi
+
+  echo ""
+  if [ "$fails" -eq 0 ]; then
+    echo "✓  all checks passed"
+    exit 0
+  else
+    echo "✗  $fails check(s) failed"
+    exit 1
+  fi
+}
+
 # =====================================================================
 # 8. ZSHRC MARKER BLOCK
 # =====================================================================
@@ -1087,6 +1259,13 @@ run_install() {
     exit 1
   fi
 }
+
+# --check-only short-circuits before any install. Read-only — uses the
+# INSTALLED[] array §4 already built, plus filesystem + JSON probes
+# defined in §7. Exits with the result.
+if [ "$CHECK_ONLY" = true ]; then
+  _check_only_run
+fi
 
 # --chrome-launcher-only short-circuits everything else: detection ran
 # (silent), warning was skipped (any-flag), now do just the rebuild.

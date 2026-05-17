@@ -1,9 +1,8 @@
 # aa
 
-One-shot macOS bootstrapper for [`if`](https://github.com/almostawake/if). Run via `curl -fsSL https://almostawake.com/n | bash`. Update via `curl -fsSL https://almostawake.com/update | bash`.
+One-shot macOS bootstrapper for [`if`](https://github.com/almostawake/if). Run via `curl -fsSL https://almostawake.com/n | bash`. Diagnose drift via `curl -fsSL https://almostawake.com/n | bash -s -- --check-only`.
 
-- `n` — installer + project provisioner (single bash script).
-- `update` — refreshes per-user assets `n` only writes on first install.
+- `n` — installer + project provisioner + diagnostics (single bash script).
 - `assets/` — `~/.claude/CLAUDE.md`, `~/.claude/settings.json`, hooks, color util, VS Code config bundle.
 - `n.md` — public README at almostawake.com.
 

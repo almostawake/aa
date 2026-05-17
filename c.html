@@ -265,6 +265,20 @@
       </li>
       <li>
         <code
+          >curl -fsSL https://almostawake.com/n | bash -s -- --check-only</code
+        >
+        <button
+          class="copy-btn"
+          data-copy="curl -fsSL https://almostawake.com/n | bash -s -- --check-only"
+        >
+          copy
+        </button>
+        <span class="note"
+          >read-only: report install + config state and exit (no writes, lists every mismatch)</span
+        >
+      </li>
+      <li>
+        <code
           >curl -fsSL https://almostawake.com/n | bash -s -- --override-osx-user-check</code
         >
         <button
@@ -276,26 +290,6 @@
         <span class="note"
           >bypass the macOS-user guard (n normally refuses to run unless your short username is 'if')</span
         >
-      </li>
-      <li>
-        <code>curl -fsSL https://almostawake.com/check | bash</code>
-        <button
-          class="copy-btn"
-          data-copy="curl -fsSL https://almostawake.com/check | bash"
-        >
-          copy
-        </button>
-        <span class="note">verify deps</span>
-      </li>
-      <li>
-        <code>curl -fsSL https://almostawake.com/update | bash</code>
-        <button
-          class="copy-btn"
-          data-copy="curl -fsSL https://almostawake.com/update | bash"
-        >
-          copy
-        </button>
-        <span class="note">refresh per-user assets (CLAUDE.md, settings, hooks, VS Code config)</span>
       </li>
       <li>
         <code>curl -fsSL https://almostawake.com/u | bash</code>
