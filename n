@@ -2519,8 +2519,14 @@ _write_functions_env() {
 # they can sign in to /admin on day one. firestore.rules require an
 # existing membership before allowing reads/writes — without this seed
 # the first user is locked out. The OAuth bearer token has cloud-platform
-# scope (admin), bypasses security rules. 200 = created, 409 = already
-# exists (treated as success so re-runs are no-ops).
+# scope (admin), bypasses security rules.
+#
+# Upsert semantics: POST first (creates with addedAt = now); on 409 fall
+# back to a PATCH with updateMask=admin so a re-run re-asserts admin=true
+# without trampling uid / lastSignInAt / the original addedAt that get
+# written after first sign-in. This matters under --reuse-project where
+# the GCP-side users row already exists from a previous bootstrap and
+# we just want to confirm the owner is still admin.
 #
 # Schema mirrored by hand from the template's canonical zod schema at
 # functions/src/common/User.ts (and the matching cmd-seed-user.mjs the
@@ -2541,11 +2547,17 @@ _seed_user() {
     -H "Content-Type: application/json" \
     --data "$body" \
     "https://firestore.googleapis.com/v1/projects/$PID/databases/(default)/documents/users?documentId=$email_lc")
-  http_log "_seed_user: HTTP $code for users/$email_lc"
-  case "$code" in
-    200|409) return 0 ;;
-    *) return 1 ;;
-  esac
+  http_log "_seed_user: POST → HTTP $code for users/$email_lc"
+  [ "$code" = "200" ] && return 0
+  [ "$code" = "409" ] || return 1
+  code=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "X-Goog-User-Project: $PID" \
+    -H "Content-Type: application/json" \
+    --data '{"fields":{"admin":{"booleanValue":true}}}' \
+    "https://firestore.googleapis.com/v1/projects/$PID/databases/(default)/documents/users/$email_lc?updateMask.fieldPaths=admin")
+  http_log "_seed_user: PATCH admin=true → HTTP $code for users/$email_lc"
+  [ "$code" = "200" ]
 }
 
 _install_deps() { ( cd "$PROJECT_PATH" && npm run install:all ); }
