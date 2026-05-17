@@ -208,12 +208,17 @@ log "n: HOME=$HOME IF_HOME=$IF_HOME"
 # 3. OS / ARCH DETECTION
 # =====================================================================
 
+# macOS-only, and only Sonoma (14) / Sequoia (15) / Tahoe (26). Anything
+# else — Linux, older macOS, future macOS we haven't tested — exits with
+# the same message. Untested versions could half-work in surprising ways
+# (LaunchServices changes between releases break the Chrome launcher,
+# Adoptium/node bundles can stop loading), so the policy is opt-in only.
 detect_os_arch() {
-  case "$(uname -s)" in
-    Darwin) OS="darwin" ;;
-    Linux)  OS="linux"  ;;
-    *) die "unsupported OS: $(uname -s) — supports macOS and Linux only" ;;
-  esac
+  local osname; osname="$(uname -s)"
+  if [ "$osname" != "Darwin" ]; then
+    die "your operating system is not supported (detected: $osname). n requires macOS Sonoma (14), Sequoia (15), or Tahoe (26)."
+  fi
+  OS="darwin"
   case "$(uname -m)" in
     arm64|aarch64) ARCH="arm64" ;;
     x86_64|amd64)  ARCH="x64"   ;;
@@ -225,13 +230,14 @@ detect_os_arch
 log "n: detected OS=$OS ARCH=$ARCH"
 
 MACOS_CODENAME=""
-if [ "$OS" = "darwin" ]; then
-  case "$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)" in
-    14) MACOS_CODENAME="sonoma"  ;;
-    15) MACOS_CODENAME="sequoia" ;;
-    26) MACOS_CODENAME="tahoe"   ;;
-  esac
-fi
+_macos_version="$(sw_vers -productVersion 2>/dev/null)"
+case "$(printf '%s' "$_macos_version" | cut -d. -f1)" in
+  14) MACOS_CODENAME="sonoma"  ;;
+  15) MACOS_CODENAME="sequoia" ;;
+  26) MACOS_CODENAME="tahoe"   ;;
+  *)  die "your operating system is not supported (detected: macOS $_macos_version). n requires macOS Sonoma (14), Sequoia (15), or Tahoe (26)." ;;
+esac
+log "n: macOS codename=$MACOS_CODENAME (version=$_macos_version)"
 
 # Route npm cache under ~/.if/. Claude Code state lives at its default
 # location (~/.claude/ + ~/.claude.json) — the CLAUDE_CONFIG_DIR redirect
