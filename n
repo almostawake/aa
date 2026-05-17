@@ -1893,9 +1893,14 @@ create_storage_bucket() {
 }
 
 # Configure Firebase Auth providers via Identity Toolkit. Enables
-# anonymous + email-link sign-in and appends "localhost" to
+# anonymous + email-link sign-in, appends "localhost" to
 # authorizedDomains so email links work in local dev (projects created
-# after 2025-04-28 don't include localhost by default).
+# after 2025-04-28 don't include localhost by default), and points the
+# email-link callback at https://<pid>.web.app/auth/action — same origin
+# as the SDK's authDomain (also <pid>.web.app, see _write_client_env)
+# so the magic link lands first-party in Chrome instead of bouncing
+# through <pid>.firebaseapp.com/__/auth/action and losing cookies under
+# third-party-cookie restrictions.
 configure_auth() {
   local pid="$1"
   http_log "configure_auth start: pid=$pid"
@@ -1951,8 +1956,9 @@ configure_auth() {
     print encode_json(\@d);
   ') || { http_log "configure_auth: domain merge failed"; return 1; }
 
+  local callback_uri="https://$pid.web.app/auth/action"
   local body
-  body=$(printf '{"signIn":{"anonymous":{"enabled":true},"email":{"enabled":true,"passwordRequired":false}},"authorizedDomains":%s}' "$domains_json")
+  body=$(printf '{"signIn":{"anonymous":{"enabled":true},"email":{"enabled":true,"passwordRequired":false}},"authorizedDomains":%s,"notification":{"sendEmail":{"callbackUri":"%s"}}}' "$domains_json" "$callback_uri")
 
   local tmp; tmp=$(mktemp)
   local code
@@ -1961,7 +1967,7 @@ configure_auth() {
     -H "X-Goog-User-Project: $pid" \
     -H "Content-Type: application/json" \
     -d "$body" \
-    "https://identitytoolkit.googleapis.com/admin/v2/projects/$pid/config?updateMask=signIn.anonymous,signIn.email,authorizedDomains")
+    "https://identitytoolkit.googleapis.com/admin/v2/projects/$pid/config?updateMask=signIn.anonymous,signIn.email,authorizedDomains,notification.sendEmail.callbackUri")
   local resp; resp=$(cat "$tmp"); rm -f "$tmp"
   http_log "configure_auth $pid → HTTP $code body: $(log_trunc "$resp")"
   if [ "$code" != "200" ]; then return 1; fi
@@ -2413,6 +2419,12 @@ _write_env() {
 # public project identifier (see https://firebase.google.com/docs/projects/api-keys),
 # safe to ship in the bundle. Real auth is Firebase Auth ID tokens +
 # Firestore security rules.
+#
+# authDomain is deliberately overridden to <pid>.web.app rather than the
+# webApps.getConfig default of <pid>.firebaseapp.com — same Hosting alias
+# the email-link callbackUri now points at (see configure_auth), so the
+# Firebase Auth SDK and the magic-link landing page share an origin and
+# stay first-party in Chrome.
 _write_client_env() {
   local list_resp app_id cfg
   list_resp=$(curl -sfL \
@@ -2432,13 +2444,13 @@ _write_client_env() {
     "https://firebase.googleapis.com/v1beta1/projects/$PID/webApps/$app_id/config") || {
       http_log "_write_client_env: webApps.getConfig failed for $app_id"; return 1; }
 
-  CFG="$cfg" perl -MJSON::PP -e '
+  CFG="$cfg" PID="$PID" perl -MJSON::PP -e '
     my $c = decode_json($ENV{CFG});
-    for my $k (qw(apiKey authDomain projectId storageBucket messagingSenderId appId)) {
+    for my $k (qw(apiKey projectId storageBucket messagingSenderId appId)) {
       die "missing $k in webApps.getConfig response\n" unless defined $c->{$k};
     }
     print "VITE_FIREBASE_API_KEY=$c->{apiKey}\n";
-    print "VITE_FIREBASE_AUTH_DOMAIN=$c->{authDomain}\n";
+    print "VITE_FIREBASE_AUTH_DOMAIN=$ENV{PID}.web.app\n";
     print "VITE_FIREBASE_PROJECT_ID=$c->{projectId}\n";
     print "VITE_FIREBASE_STORAGE_BUCKET=$c->{storageBucket}\n";
     print "VITE_FIREBASE_MESSAGING_SENDER_ID=$c->{messagingSenderId}\n";
