@@ -60,6 +60,27 @@ say()     { printf '%s\n' "$*"; }
 die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 # Args.
+#
+# Three phases — install, config, project — and every flag scopes which
+# of them run. Check / fix / require stay in lockstep: --check-only
+# verifies the same surface --install-only fixes, and --project-only
+# fails fast if anything in that surface is missing.
+#
+# Phase boundaries:
+#   install  →  toolchain (git/gh/jq/node/java/claude/vscode/chrome.app)
+#               + Chrome with Claude Code.app wrapper (force-rebuilt
+#               every run, deleting any /Applications + ~/Applications
+#               variants first).
+#   config   →  ~/.claude/* files (CLAUDE.md, hook-session-namer.mjs,
+#               util-my-color.mjs seeded if absent; settings.json keys
+#               merged), ~/.claude.json (mcpServers.chrome-devtools
+#               merged, trust path), Dock pins (Chrome wrapper +
+#               VS Code), ~/.zshrc marker block.
+#   project  →  sign-in, GCP project create, API enables, Firebase add,
+#               web app + Firestore + Storage + Auth config, clone +
+#               deploy.
+#
+# Flags:
 #   --reuse-project <id>  skip the create-a-new-project prompt and use
 #                         the given (already-existing) GCP project. We
 #                         don't try to create it; if it doesn't exist
@@ -73,57 +94,34 @@ die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 #                         supported. Default australia-southeast1. Ignored
 #                         when --reuse-project targets an existing project:
 #                         its Firestore location is already fixed.
-#   --project-only        skip the install + config phases (dependency
-#                         install pass, Claude config repair, workspace/
-#                         Dock, ~/.zshrc block) and go straight to
-#                         sign-in + project provisioning. Detection
-#                         still runs — if anything's missing we bail
-#                         rather than limp into a cryptic mid-provision
-#                         failure. For returning users spinning up their
-#                         Nth project on an already-set-up machine.
-#   --install-only        run install + config and stop. Skips sign-in,
-#                         project creation, clone, deploy. Install phase
-#                         force-rebuilds the Chrome wrapper + Dock entry
-#                         (deleting any pre-existing /Applications or
-#                         ~/Applications variants) on every run, so
-#                         stale launchers from manual/legacy installs
-#                         get healed. Config phase seeds missing Claude
-#                         files and merges required keys
-#                         (mcpServers.chrome-devtools, defaultMode,
-#                         skipDangerousModePermissionPrompt, session-
-#                         namer hook) into existing files without
-#                         clobbering user additions. For setting up a
-#                         machine + healing wrapper/config without
-#                         provisioning a project.
-#   --chrome-launcher-only
-#                         dedicated rebuild path for the Chrome-with-
-#                         Claude launcher: nuke any existing launcher
-#                         .app from /Applications + ~/Applications,
-#                         strip its Dock entries, then rebuild in
-#                         ~/Applications and re-pin to the Dock. Does
-#                         nothing else — no deps, no config, no cloud.
-#   --check-only          read-only diagnostic. Prints install state for
-#                         every dependency (same probes n uses) plus a
-#                         second block of config checks against the
-#                         Chrome-with-Claude launcher and Claude config
-#                         (mcpServers.chrome-devtools in ~/.claude.json,
-#                         defaultMode/skipDangerousModePermissionPrompt/
-#                         session-namer hook in ~/.claude/settings.json).
-#                         No writes, no network, no prompts. Lists every
-#                         mismatch; exits 1 if any check fails, 0 if all
-#                         pass.
+#   --install-only        run install + config and stop. Skips project.
+#                         Idempotent / heals existing setups: force-
+#                         rebuilds the Chrome wrapper, merges required
+#                         keys into ~/.claude.json + ~/.claude/settings
+#                         .json, re-pins Dock, rewrites the ~/.zshrc
+#                         marker block. Mutex with --project-only.
+#   --project-only        skip install + config; go straight to sign-in
+#                         and project provisioning. Pre-flights with the
+#                         full --check-only suite — bails with a heal
+#                         hint if anything's missing rather than
+#                         half-deploying onto a broken machine. Mutex
+#                         with --install-only.
+#   --check-only          read-only diagnostic. Verifies every install +
+#                         config item (toolchain, Chrome wrapper bash +
+#                         Info.plist + linked Chrome.app, mcp server in
+#                         ~/.claude.json, settings.json keys, Dock pins,
+#                         zshrc marker). Lists every mismatch. Exits 0
+#                         if clean, 1 otherwise.
 #   --override-osx-user-check
-#                         bypass the macOS-user guard (see below). n
-#                         normally refuses to run unless the current
-#                         macOS short username is 'if', because its
-#                         writes (~/.zshrc, ~/Applications, ~/.claude/,
-#                         ~/.if/, Dock) are aimed at a dedicated account.
-#                         Use when developing n itself on your daily
-#                         account, or when you accept the side effects.
+#                         bypass the macOS-user guard. n normally
+#                         refuses unless the short username is 'if',
+#                         because its writes (~/.zshrc, ~/Applications,
+#                         ~/.claude/, ~/.if/, Dock) are aimed at a
+#                         dedicated account. For developing n itself or
+#                         when you accept the side effects.
 REUSE_PROJECT_ID=""
 PROJECT_ONLY=false
 INSTALL_ONLY=false
-CHROME_LAUNCHER_ONLY=false
 CHECK_ONLY=false
 OVERRIDE_OSX_USER_CHECK=false
 REGION="australia-southeast1"
@@ -139,10 +137,9 @@ while [ "$#" -gt 0 ]; do
     --region)          [ -n "${2-}" ] || die "--region requires a region id"
                        REGION="$2"; shift 2 ;;
     --region=*)        REGION="${1#*=}"; shift ;;
-    --project-only)    PROJECT_ONLY=true; shift ;;
-    --install-only)      INSTALL_ONLY=true; shift ;;
-    --chrome-launcher-only) CHROME_LAUNCHER_ONLY=true; shift ;;
-    --check-only) CHECK_ONLY=true; shift ;;
+    --project-only)            PROJECT_ONLY=true; shift ;;
+    --install-only)            INSTALL_ONLY=true; shift ;;
+    --check-only)              CHECK_ONLY=true; shift ;;
     --override-osx-user-check) OVERRIDE_OSX_USER_CHECK=true; shift ;;
     *) die "unknown argument: $1" ;;
   esac
@@ -853,6 +850,22 @@ _dock_apps_remove_url() {
   return 0
 }
 
+# Dock helper: return 0 if any :persistent-apps entry's _CFURLString
+# equals $1, 1 otherwise. Used by the check pass.
+_dock_apps_has_url() {
+  local target="$1"
+  local plist="$HOME/Library/Preferences/com.apple.dock.plist"
+  [ -f "$plist" ] || return 1
+  local i=0
+  while /usr/libexec/PlistBuddy -c "Print :persistent-apps:$i" "$plist" >/dev/null 2>&1; do
+    local u
+    u=$(/usr/libexec/PlistBuddy -c "Print :persistent-apps:$i:tile-data:file-data:_CFURLString" "$plist" 2>/dev/null || true)
+    [ "$u" = "$target" ] && return 0
+    i=$((i+1))
+  done
+  return 1
+}
+
 # Dock helper: prepend a new :persistent-apps entry at slot 0 for URL $1.
 # Used in reverse order so final slot assignment lines up left-to-right.
 _dock_apps_insert_at_zero() {
@@ -1008,15 +1021,10 @@ _configure_workspace() {
 # launcher hardcodes its path) or if a /Applications launcher exists
 # but can't be removed without admin (caller is told to sudo + re-run).
 #
-# Does NOT pin to the Dock — caller decides. _chrome_launcher_only_run
-# pins + killall after; the install pass lets _configure_workspace do
-# its standard pin (slot 0, alongside VS Code) so the Dock layout
-# matches a fresh install.
-#
-# Called by:
-#   - every install pass (so legacy /Applications launchers + stale
-#     bashes from manual installs get healed on the next n run)
-#   - --chrome-launcher-only (which adds the pin + Dock kick itself)
+# Does NOT pin to the Dock — _configure_workspace handles that at slot 0
+# alongside VS Code, so the Dock layout matches a fresh install. Called
+# from every install pass so legacy /Applications launchers + stale
+# bashes from manual installs get healed on the next n run.
 _rebuild_chrome_launcher() {
   [ "$OS" = "darwin" ] || return 0
 
@@ -1043,45 +1051,22 @@ _rebuild_chrome_launcher() {
   _build_chrome_launcher "$chrome_app"
 }
 
-# Dedicated entrypoint for --chrome-launcher-only. Same work as the
-# in-pass rebuild above, but adds its own Dock pin + Dock kick + exit
-# so the standalone flag does the whole loop end-to-end.
-_chrome_launcher_only_run() {
-  [ "$OS" = "darwin" ] || die "--chrome-launcher-only is macOS-only"
-
-  echo ""
-  echo "rebuilding Chrome launcher"
-  echo ""
-
-  _rebuild_chrome_launcher
-  echo "✓  rebuilt $HOME/Applications/Chrome with Claude Code.app"
-
-  _dock_apps_insert_at_zero "file://$HOME/Applications/Chrome%20with%20Claude%20Code.app/"
-  killall Dock 2>/dev/null || true
-
-  echo ""
-  echo "✓  done"
-  exit 0
-}
-
-# Read-only diagnostic entrypoint for --check-only. Prints install
-# state for every dependency (reuses §4's INSTALLED[] probes) plus a
-# config-drift block covering the Chrome launcher bash + Info.plist
-# and the two Claude config files. Every check is reported (no early
-# exit on first failure) so the user gets a full punch list. Exits 1
-# if any check failed, 0 if all passed.
+# Run every check --check-only verifies and every fix --install-only
+# applies. Prints rows as they run, sets the global $CHECK_FAILS, and
+# returns 0 / 1. Shared by --check-only and the --project-only gate
+# so check ⊇ fix ⊇ require stays in lockstep — any drift between the
+# three would show up here as a missing row or a mismatch.
 #
-# Marker-based — not byte-for-byte. The launcher bash gets a per-
-# install Chrome path baked in (varies between users), so checking
-# for the expected flags + Chrome-Claude profile + a working hardcoded
-# Chrome path catches the failure modes ("old variant with wrong
-# bundle id", "missing --remote-debugging-port", "Chrome.app moved")
-# without false-positiving on path differences.
-_check_only_run() {
-  local fails=0
+# Marker-based for the Chrome launcher (not byte-for-byte): the bash
+# gets a per-install Chrome.app path baked in, so we assert the
+# load-bearing flags + the Chrome-Claude profile + a working hardcoded
+# Chrome path rather than diffing the whole file.
+CHECK_FAILS=0
+_run_checks() {
+  CHECK_FAILS=0
   local pass_row fail_row
   pass_row() { printf '✓     %s\n' "$1"; }
-  fail_row() { printf '✗     %s\n' "$1"; fails=$((fails + 1)); }
+  fail_row() { printf '✗     %s\n' "$1"; CHECK_FAILS=$((CHECK_FAILS + 1)); }
 
   echo ""
   echo "install"
@@ -1106,7 +1091,7 @@ _check_only_run() {
   if [ -d "$launcher_user" ]; then
     pass_row "launcher .app present in ~/Applications"
   else
-    fail_row "launcher .app missing from ~/Applications (run: n --chrome-launcher-only)"
+    fail_row "launcher .app missing from ~/Applications"
   fi
 
   if [ ! -d "$launcher_sys" ]; then
@@ -1134,7 +1119,6 @@ _check_only_run() {
       fail_row "launcher bash missing markers:$missing"
     fi
 
-    # Hardcoded Chrome path inside the bash must point at a real Chrome.app.
     local chrome_path
     chrome_path=$(grep -oE '"[^"]*\.app/Contents/MacOS/Google Chrome"' "$launcher_bash" | head -1 | tr -d '"')
     if [ -n "$chrome_path" ] && [ -x "$chrome_path" ]; then
@@ -1142,7 +1126,7 @@ _check_only_run() {
     elif [ -n "$chrome_path" ]; then
       fail_row "launcher Chrome path broken: $chrome_path does not exist"
     else
-      fail_row "launcher bash has no hardcoded Chrome.app path (expected \"...Google Chrome.app/Contents/MacOS/Google Chrome\")"
+      fail_row "launcher bash has no hardcoded Chrome.app path"
     fi
   else
     fail_row "launcher bash missing or not executable at $launcher_bash"
@@ -1153,7 +1137,7 @@ _check_only_run() {
   echo ""
   local claude_json="$HOME/.claude.json"
   if [ ! -f "$claude_json" ]; then
-    fail_row "~/.claude.json missing (run n)"
+    fail_row "~/.claude.json missing"
   else
     local mcp_status
     mcp_status=$(perl -MJSON::PP -e '
@@ -1185,7 +1169,7 @@ _check_only_run() {
 
   local claude_settings="$HOME/.claude/settings.json"
   if [ ! -f "$claude_settings" ]; then
-    fail_row "~/.claude/settings.json missing (run n)"
+    fail_row "~/.claude/settings.json missing"
   else
     local settings_status
     settings_status=$(perl -MJSON::PP -e '
@@ -1215,11 +1199,47 @@ _check_only_run() {
   fi
 
   echo ""
-  if [ "$fails" -eq 0 ]; then
+  echo "config — dock + shell"
+  echo ""
+  local url_chrome="file://$HOME/Applications/Chrome%20with%20Claude%20Code.app/"
+  local url_chrome_legacy="file:///Applications/Chrome%20with%20Claude%20Code.app/"
+  local url_vscode="file://$HOME/Applications/Visual%20Studio%20Code.app/"
+
+  if _dock_apps_has_url "$url_chrome"; then
+    pass_row "Dock pins Chrome with Claude Code (~/Applications)"
+  else
+    fail_row "Dock missing Chrome with Claude Code pin"
+  fi
+  if _dock_apps_has_url "$url_chrome_legacy"; then
+    fail_row "Dock still pins legacy /Applications Chrome wrapper"
+  else
+    pass_row "Dock has no legacy /Applications Chrome pin"
+  fi
+  if _dock_apps_has_url "$url_vscode"; then
+    pass_row "Dock pins Visual Studio Code"
+  else
+    fail_row "Dock missing VS Code pin"
+  fi
+
+  if [ -f "$HOME/.zshrc" ] && grep -qF "$MARKER_START" "$HOME/.zshrc"; then
+    pass_row "~/.zshrc has the if-install marker block"
+  else
+    fail_row "~/.zshrc missing the if-install marker block"
+  fi
+
+  [ "$CHECK_FAILS" -eq 0 ]
+}
+
+# --check-only entrypoint: run the checks, print a summary line, exit
+# with 0 if clean / 1 otherwise.
+_check_only_run() {
+  _run_checks || true
+  echo ""
+  if [ "$CHECK_FAILS" -eq 0 ]; then
     echo "✓  all checks passed"
     exit 0
   else
-    echo "✗  $fails check(s) failed"
+    echo "✗  $CHECK_FAILS check(s) failed — run 'n --install-only' to heal"
     exit 1
   fi
 }
@@ -1345,30 +1365,18 @@ if [ "$CHECK_ONLY" = true ]; then
   _check_only_run
 fi
 
-# --chrome-launcher-only short-circuits everything else: detection ran
-# (silent), warning was skipped (any-flag), now do just the rebuild.
-if [ "$CHROME_LAUNCHER_ONLY" = true ]; then
-  _chrome_launcher_only_run
-fi
-
 if [ "$PROJECT_ONLY" = true ]; then
-  # --project-only: trust that a prior run installed + configured the
-  # machine. Detection (§4) still ran — enforce it here: bail on
-  # anything missing rather than limping into a cryptic mid-provision
-  # failure. No PATH export needed — a returning user invokes us via
-  # the `n` alias, so their interactive shell already sourced the
-  # ~/.zshrc block. _apply_claude_config / _configure_workspace /
-  # _write_zshrc are skipped.
-  missing=()
-  for i in "${!ITEMS[@]}"; do
-    [ "${INSTALLED[$i]}" = "true" ] || missing+=("${ITEMS[$i]}")
-  done
-  if [ "${#missing[@]}" -gt 0 ]; then
+  # --project-only: pre-flight with the same surface --check-only
+  # verifies. Bail with a heal hint rather than half-deploying onto a
+  # broken machine. No PATH export needed — a returning user invokes
+  # us via the `n` alias, so their interactive shell already sourced
+  # the ~/.zshrc block. Install + config phases are skipped.
+  _run_checks || true
+  if [ "$CHECK_FAILS" -gt 0 ]; then
     echo ""
-    echo "✗  --project-only given, but these dependencies aren't installed:"
-    for m in "${missing[@]}"; do echo "     - $m"; done
+    echo "✗  --project-only requires install + config to be healthy ($CHECK_FAILS check(s) failed above)"
     echo ""
-    echo "   re-run 'n' without --project-only to install them first"
+    echo "   re-run 'n --install-only' to heal, then 'n --project-only' again"
     echo ""
     exit 1
   fi

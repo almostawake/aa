@@ -5,17 +5,33 @@ behalf of a user.
 
 ## What `n` does
 
-A single bash script that, on a fresh macOS or Linux box, installs all
-the tooling a non-developer needs (git, gh, jq, node 22, java 21, Claude
-Code, Chrome with debug-port profile, VS Code), provisions a brand-new
-GCP/Firebase project (creates project, links billing, enables ~18 APIs,
-creates Firestore + Storage + web app + auth providers), clones the
-[`if`](https://github.com/almostawake/if) SvelteKit template into
-`$PROJECT_DIR/<project-id>`, seeds the user's email into the Firestore
-users whitelist, and deploys to Firebase Hosting.
+A single bash script that runs in three phases on a fresh macOS box
+(Sonoma / Sequoia / Tahoe), gated on a dedicated `if` user account:
 
-Idempotent. Re-runs skip already-installed tooling and go straight to
-"pick or create a project".
+- **install** — toolchain (git, gh, jq, node 22, java 21, Claude Code,
+  Google Chrome, VS Code) plus the `Chrome with Claude Code.app`
+  wrapper that exposes Chrome's debug port for the MCP server. The
+  wrapper is force-rebuilt on every run, deleting any pre-existing
+  `/Applications` or `~/Applications` variants (legacy / manual
+  installs get healed automatically).
+- **config** — Claude config files (`~/.claude/CLAUDE.md`, hooks +
+  utils seeded if absent; `~/.claude/settings.json` merged for
+  `defaultMode` / `skipDangerousModePermissionPrompt` / session-namer
+  hook; `~/.claude.json` merged for the `chrome-devtools` MCP server
+  and trust path), Dock pins (Chrome wrapper + VS Code at slot 0/1),
+  `~/.zshrc` marker block (PATH, env, aliases).
+- **project** — Google OAuth sign-in, GCP project create, ~18 API
+  enables, Firebase add, web app + Firestore + Storage + Auth config,
+  clone of the [`if`](https://github.com/almostawake/if) SvelteKit
+  template into `$PROJECT_DIR/<project-id>`, seed the user's email
+  into the Firestore users whitelist, deploy to Firebase Hosting.
+
+Idempotent. Re-runs skip already-installed tooling, re-assert config
+(no clobber of user additions), and go straight to "pick or create a
+project". Drift between what's checked, what's fixed, and what's
+required is the script's invariant — `--check-only` verifies the same
+surface `--install-only` fixes, and `--project-only` pre-flights with
+the same checks before touching the cloud.
 
 Run as:
 
@@ -42,32 +58,37 @@ All optional. Skip with no flags for the normal interactive flow.
   aren't supported. Defaults to `australia-southeast1`. Ignored when
   `--reuse-project` targets an existing project — its Firestore location
   is already fixed.
-- `--project-only` — skip the install + config phases (dependency
-  install, Claude config repair, workspace/Dock pins, `~/.zshrc` block)
-  and go straight to sign-in + project provisioning. Dependency
-  detection still runs — if anything is missing, `n` bails (no install
-  attempt) and tells you to re-run without the flag. For returning users
-  spinning up another project on an already-set-up machine.
 - `--install-only` — run install + config and stop. Skips sign-in,
-  project creation, clone, deploy. Install phase force-rebuilds the
-  Chrome wrapper + Dock entry on every run (deleting any pre-existing
-  `/Applications` or `~/Applications` variants), so stale launchers
-  from manual / legacy installs get healed. Config phase seeds missing
-  Claude files and merges required keys (`mcpServers.chrome-devtools`,
-  `defaultMode`, `skipDangerousModePermissionPrompt`, session-namer
-  hook) into existing files without clobbering user additions. For
-  setting up a machine + healing wrapper/config without provisioning
-  a project. Mutually exclusive with `--project-only`.
-- `--chrome-launcher-only` — dedicated rebuild path for the
-  Chrome-with-Claude launcher. Wipes any existing
-  `Chrome with Claude Code.app` from `/Applications` and `~/Applications`
-  (admin needed for the former — fails fast with a `sudo` hint), strips
-  its Dock entries, then rebuilds the launcher in `~/Applications` and
-  re-pins to the Dock. Refuses to build if Google Chrome itself isn't
-  installed. Does nothing else — no deps, no config, no cloud.
-- `--check-only` — read-only diagnostic. Prints install state for each
-  dependency plus a config block (Chrome launcher integrity, Claude
-  config keys). No writes. Exits 1 if any check fails.
+  project creation, clone, deploy. Heals existing setups: force-
+  rebuilds the Chrome wrapper (deleting `/Applications` and
+  `~/Applications` variants first), merges required keys into
+  `~/.claude.json` + `~/.claude/settings.json` without clobbering user
+  additions, re-pins the Dock, rewrites the `~/.zshrc` marker block.
+  Mutually exclusive with `--project-only`.
+- `--project-only` — skip install + config and go straight to sign-in +
+  project provisioning. Pre-flights with the same checks as
+  `--check-only` and bails with a heal hint (`re-run n --install-only`)
+  if anything's missing, rather than half-deploying onto a broken
+  machine. For returning users spinning up another project on an
+  already-set-up machine. Mutually exclusive with `--install-only`.
+- `--check-only` — read-only diagnostic. Verifies every install + config
+  item:
+  - toolchain rows (git, gh, jq, node 22, java 21, claude, chrome,
+    vscode);
+  - Chrome wrapper bash markers + Info.plist bundle id + the hardcoded
+    Chrome.app path actually resolves, plus the absence of a legacy
+    `/Applications/Chrome with Claude Code.app`;
+  - `~/.claude.json` `mcpServers.chrome-devtools` matches the shipped
+    entry (command + args), `~/.claude/settings.json` has
+    `defaultMode=bypassPermissions`, `skipDangerousModePermissionPrompt
+    =true`, and a session-namer hook entry in `hooks.UserPromptSubmit`;
+  - Dock pins Chrome wrapper (`~/Applications` variant) + VS Code, no
+    legacy `/Applications` Chrome pin; `~/.zshrc` has the if-install
+    marker block.
+  No writes. Lists every mismatch. Exits 0 if clean, 1 otherwise.
+- `--override-osx-user-check` — bypass the macOS-user guard (`n` normally
+  requires the short username to be `if`). For developing `n` itself or
+  diagnosing a colleague's daily-driver account.
 
 If `n` is invoked from inside a directory that already contains a
 `.env.auth.json` (e.g. spinning up a sibling project from an
@@ -130,6 +151,16 @@ behalf.
 
 ## Required prerequisites
 
+The user's macOS box must have:
+
+- **A dedicated `if` account** (short username `if`). `n` refuses to
+  run on any other account because its writes (`~/.zshrc`, the Dock,
+  `~/Applications`, `~/.claude/`, `~/.if/`) clobber daily-driver
+  config. Override with `--override-osx-user-check` if you accept the
+  side effects.
+- **Sonoma (14), Sequoia (15), or Tahoe (26).** Untested versions exit
+  with `your operating system is not supported`.
+
 The user's Google account must have:
 
 - **An open billing account.** Free trial counts. Detected via
@@ -140,10 +171,11 @@ The user's Google account must have:
   Console and start their create-a-project flow once" message and
   exits.
 
-Both are one-time setups. If the script exits with a setup-needed
-message, tell the user to do the one-time fix in Firebase Console, then
-re-run `n`. Do not try to handle these flows in the agent — they
-require the user's browser session and Google account interactions.
+Both Google-side items are one-time setups. If the script exits with a
+setup-needed message, tell the user to do the one-time fix in Firebase
+Console, then re-run `n`. Do not try to handle these flows in the
+agent — they require the user's browser session and Google account
+interactions.
 
 ## Success signal
 
@@ -153,9 +185,9 @@ On success, the last line printed is:
 your template project is live at https://<project-id>.web.app
 ```
 
-The script exits 0 and (on macOS, when VS Code is installed) opens the
-project in VS Code. Hosting is live (verify with
-`curl -fsI https://<project-id>.web.app`), Firestore rules are deployed,
+The script exits 0 and opens the project in VS Code. Hosting is live
+(verify with `curl -fsI https://<project-id>.web.app`), Firestore rules
+are deployed,
 the user's email is seeded into `users`.
 
 ## Where state lands
