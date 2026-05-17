@@ -93,10 +93,19 @@ die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 #                         strip its Dock entries, then rebuild in
 #                         ~/Applications and re-pin to the Dock. Does
 #                         nothing else — no deps, no config, no cloud.
+#   --override-osx-user-check
+#                         bypass the macOS-user guard (see below). n
+#                         normally refuses to run unless the current
+#                         macOS short username is 'if', because its
+#                         writes (~/.zshrc, ~/Applications, ~/.claude/,
+#                         ~/.if/, Dock) are aimed at a dedicated account.
+#                         Use when developing n itself on your daily
+#                         account, or when you accept the side effects.
 REUSE_PROJECT_ID=""
 SKIP_SETUP=false
 INSTALL_ONLY=false
 CHROME_LAUNCHER_ONLY=false
+OVERRIDE_OSX_USER_CHECK=false
 REGION="australia-southeast1"
 # Any flag passed (--region, --reuse-project, --skip-setup, etc.) means
 # this is a returning user driving n with intent — skip the warning prompt.
@@ -113,6 +122,7 @@ while [ "$#" -gt 0 ]; do
     --skip-setup)      SKIP_SETUP=true; shift ;;
     --install-only)    INSTALL_ONLY=true; shift ;;
     --chrome-launcher-only) CHROME_LAUNCHER_ONLY=true; shift ;;
+    --override-osx-user-check) OVERRIDE_OSX_USER_CHECK=true; shift ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -129,6 +139,34 @@ case "$REGION" in
   *-*[0-9]) : ;;
   *) die "--region must be a single region like us-central1 — got '$REGION' (multi-regions such as nam5/eur3 aren't supported: Functions can't deploy there)" ;;
 esac
+
+# OSX user guard. n writes to ~/.zshrc, ~/Applications, ~/.claude/,
+# ~/.if/, and the Dock. Running it on the user's daily-driver account
+# clobbers config they actually depend on — refuse unless the short
+# username is 'if'. id -un asks the OS directly (more reliable than
+# $USER under curl|bash). Linux is unaffected (no Dock / .app writes).
+if [ "$(uname -s)" = "Darwin" ] && [ "$OVERRIDE_OSX_USER_CHECK" = false ]; then
+  _current_user=$(id -un 2>/dev/null || echo "${USER:-unknown}")
+  if [ "$_current_user" != "if" ]; then
+    cat >&2 <<EOF
+
+✗  n must be run from a dedicated macOS account whose short username
+   is 'if' — current user is '$_current_user'.
+
+   why: n rewrites ~/.zshrc, the Dock, ~/Applications, ~/.claude/,
+   and ~/.if/. on your daily account it'll clobber config you depend on.
+
+   to fix: System Settings → Users & Groups → Add Account.
+   create a Standard account with the short name 'if', log into it,
+   then re-run.
+
+   if you're developing n itself and accept the side effects, re-run
+   with --override-osx-user-check.
+
+EOF
+    exit 1
+  fi
+fi
 
 prompt_yn() {
   local q="$1" def="$2" hint answer
