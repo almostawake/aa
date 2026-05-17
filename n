@@ -1367,12 +1367,19 @@ fi
 
 if [ "$PROJECT_ONLY" = true ]; then
   # --project-only: pre-flight with the same surface --check-only
-  # verifies. Bail with a heal hint rather than half-deploying onto a
-  # broken machine. No PATH export needed — a returning user invokes
-  # us via the `n` alias, so their interactive shell already sourced
-  # the ~/.zshrc block. Install + config phases are skipped.
-  _run_checks || true
+  # verifies. Buffer the row output to a tmpfile so we stay silent on
+  # success (the next UI block leads with "setting up google hosting");
+  # on failure, flush the full punch list before the heal hint so the
+  # user sees exactly what needs fixing. CHECK_FAILS is a global set by
+  # _run_checks — survives the redirect since there's no subshell.
+  # No PATH export needed — a returning user invokes us via the `n`
+  # alias, so their interactive shell already sourced the ~/.zshrc
+  # block. Install + config phases are skipped.
+  _check_buf=$(mktemp)
+  _run_checks > "$_check_buf" || true
   if [ "$CHECK_FAILS" -gt 0 ]; then
+    cat "$_check_buf"
+    rm -f "$_check_buf"
     echo ""
     echo "✗  --project-only requires install + config to be healthy ($CHECK_FAILS check(s) failed above)"
     echo ""
@@ -1380,6 +1387,7 @@ if [ "$PROJECT_ONLY" = true ]; then
     echo ""
     exit 1
   fi
+  rm -f "$_check_buf"
 else
   # Always render the row UI — even on re-runs where everything is
   # already installed, the user sees the verification pass before we
