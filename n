@@ -2701,11 +2701,15 @@ deploy_all
 echo ""
 printf "your template project is live at https://%s.web.app\n" "$PID"
 
-# Open VS Code on the new project. The auto-launch-Claude-in-VS-Code-
-# integrated-terminal trick (via .vscode/tasks.json + runOn:folderOpen)
-# was unreliable so we dropped it; VS Code just opens at the project,
-# user kicks off claude themselves.
+# Open VS Code on the new project. --new-window forces a fresh window
+# even when VS Code is already running, so we don't reuse / steal focus
+# from any existing window the user is working in. With no VS Code
+# running, --new-window just starts it (the "new" window is the only
+# window). The auto-launch-Claude-in-VS-Code-integrated-terminal trick
+# (via .vscode/tasks.json + runOn:folderOpen) was unreliable so we
+# dropped it; VS Code just opens at the project, user kicks off claude
+# themselves.
 if [ "$OS" = "darwin" ] && [ -d "$HOME/Applications/Visual Studio Code.app" ]; then
-  ( "$IF_HOME/vscode/bin/code" "$PROJECT_PATH" >/dev/null 2>&1 & ) || true
+  ( "$IF_HOME/vscode/bin/code" --new-window "$PROJECT_PATH" >/dev/null 2>&1 & ) || true
 fi
 echo ""
