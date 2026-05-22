@@ -74,7 +74,8 @@ die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 # Three phases — install, config, project — and every flag scopes which
 # of them run. Check / fix / require stay in lockstep: --check-only
 # verifies the same surface --install-only fixes, and --project-only
-# fails fast if anything in that surface is missing.
+# fails fast if the toolchain is missing (config drift is reported but
+# not fatal — provisioning only needs the install phase).
 #
 # Phase boundaries:
 #   install  →  toolchain (git/gh/jq/node/java/claude/vscode/chrome.app)
@@ -112,9 +113,9 @@ die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 #                         marker block. Mutex with --project-only.
 #   --project-only        skip install + config; go straight to sign-in
 #                         and project provisioning. Pre-flights with the
-#                         full --check-only suite — bails with a heal
-#                         hint if anything's missing rather than
-#                         half-deploying onto a broken machine. Mutex
+#                         full --check-only suite, but only a missing
+#                         toolchain bails (with a heal hint) — config
+#                         drift is reported and run continues. Mutex
 #                         with --install-only.
 #   --check-only          read-only diagnostic. Verifies every install +
 #                         config item (toolchain, Chrome wrapper bash +
@@ -122,13 +123,6 @@ die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 #                         ~/.claude.json, settings.json keys, Dock pins,
 #                         zshrc marker). Lists every mismatch. Exits 0
 #                         if clean, 1 otherwise.
-#   --override-osx-user-check
-#                         bypass the macOS-user guard. n normally
-#                         refuses unless the short username is 'if',
-#                         because its writes (~/.zshrc, ~/Applications,
-#                         ~/.claude/, ~/.if/, Dock) are aimed at a
-#                         dedicated account. For developing n itself or
-#                         when you accept the side effects.
 REUSE_PROJECT_ID=""
 PROJECT_ONLY=false
 INSTALL_ONLY=false
@@ -187,9 +181,6 @@ if [ "$(uname -s)" = "Darwin" ] && [ "$OVERRIDE_OSX_USER_CHECK" = false ]; then
    to fix: System Settings → Users & Groups → Add Account.
    create a Standard account with the short name 'if', log into it,
    then re-run.
-
-   if you're developing n itself and accept the side effects, re-run
-   with --override-osx-user-check.
 
 EOF
     exit 1
@@ -1098,9 +1089,14 @@ _kill_all_chrome() {
 # gets a per-install Chrome.app path baked in, so we assert the
 # load-bearing flags + the Chrome-Claude profile + a working hardcoded
 # Chrome path rather than diffing the whole file.
+# CHECK_FAILS counts every failure; INSTALL_FAILS counts only the
+# toolchain (install-phase) rows. --project-only gates on INSTALL_FAILS
+# alone — config drift is noted but never fatal there.
 CHECK_FAILS=0
+INSTALL_FAILS=0
 _run_checks() {
   CHECK_FAILS=0
+  INSTALL_FAILS=0
   local pass_row fail_row
   pass_row() { printf '✓     %s\n' "$1"; }
   fail_row() { printf '✗     %s\n' "$1"; CHECK_FAILS=$((CHECK_FAILS + 1)); }
@@ -1114,6 +1110,7 @@ _run_checks() {
       pass_row "${ITEMS[$i]}"
     else
       fail_row "${ITEMS[$i]} (not installed)"
+      INSTALL_FAILS=$((INSTALL_FAILS + 1))
     fi
   done
 
@@ -1474,25 +1471,35 @@ fi
 
 if [ "$PROJECT_ONLY" = true ]; then
   # --project-only: pre-flight with the same surface --check-only
-  # verifies. Buffer the row output to a tmpfile so we stay silent on
-  # success (the next UI block leads with "setting up google hosting");
-  # on failure, flush the full punch list before the heal hint so the
-  # user sees exactly what needs fixing. CHECK_FAILS is a global set by
-  # _run_checks — survives the redirect since there's no subshell.
-  # No PATH export needed — a returning user invokes us via the `n`
-  # alias, so their interactive shell already sourced the ~/.zshrc
-  # block. Install + config phases are skipped.
+  # verifies, but only *install* failures block — project provisioning
+  # needs the toolchain present; config drift (Chrome launcher, claude
+  # files, Dock, zshrc) is reported but not fatal here. Buffer the row
+  # output to a tmpfile so we stay silent on a fully-clean run (the next
+  # UI block leads with "setting up google hosting"); otherwise flush
+  # the full punch list so the user sees what's off. INSTALL_FAILS /
+  # CHECK_FAILS are globals set by _run_checks — they survive the
+  # redirect since there's no subshell. No PATH export needed — a
+  # returning user invokes us via the `n` alias, so their interactive
+  # shell already sourced the ~/.zshrc block. Install + config phases
+  # are skipped.
   _check_buf=$(mktemp)
   _run_checks > "$_check_buf" || true
-  if [ "$CHECK_FAILS" -gt 0 ]; then
+  if [ "$INSTALL_FAILS" -gt 0 ]; then
     cat "$_check_buf"
     rm -f "$_check_buf"
     echo ""
-    echo "✗  --project-only requires install + config to be healthy ($CHECK_FAILS check(s) failed above)"
+    echo "✗  --project-only requires the toolchain installed ($INSTALL_FAILS install check(s) failed above)"
     echo ""
     echo "   re-run 'n --install-only' to heal, then 'n --project-only' again"
     echo ""
     exit 1
+  fi
+  if [ "$CHECK_FAILS" -gt 0 ]; then
+    cat "$_check_buf"
+    echo ""
+    echo "!  $CHECK_FAILS config check(s) failed above — continuing anyway (--project-only)"
+    echo "   re-run 'n --install-only' to heal config drift"
+    echo ""
   fi
   rm -f "$_check_buf"
 else
