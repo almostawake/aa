@@ -2792,11 +2792,24 @@ printf "your template project is live at https://%s.web.app\n" "$PID"
 # even when VS Code is already running, so we don't reuse / steal focus
 # from any existing window the user is working in. With no VS Code
 # running, --new-window just starts it (the "new" window is the only
-# window). The auto-launch-Claude-in-VS-Code-integrated-terminal trick
-# (via .vscode/tasks.json + runOn:folderOpen) was unreliable so we
-# dropped it; VS Code just opens at the project, user kicks off claude
-# themselves.
-if [ "$OS" = "darwin" ] && [ -d "$HOME/Applications/Visual Studio Code.app" ]; then
-  ( "$IF_HOME/vscode/bin/code" --new-window "$PROJECT_PATH" >/dev/null 2>&1 & ) || true
+# window). Resolve the `code` CLI straight from whichever VS Code
+# bundle exists — ~/Applications when n installed it, /Applications
+# when the user brought their own — rather than the ~/.if/vscode/bin
+# symlink, which only exists when n ran _install_vscode (skipped when
+# VS Code was already present). The auto-launch-Claude-in-VS-Code-
+# integrated-terminal trick (via .vscode/tasks.json + runOn:folderOpen)
+# was unreliable so we dropped it; VS Code just opens at the project,
+# user kicks off claude themselves.
+if [ "$OS" = "darwin" ]; then
+  vscode_cli=""
+  for vscode_app in "$HOME/Applications/Visual Studio Code.app" \
+                    "/Applications/Visual Studio Code.app"; do
+    if [ -x "$vscode_app/Contents/Resources/app/bin/code" ]; then
+      vscode_cli="$vscode_app/Contents/Resources/app/bin/code"
+      break
+    fi
+  done
+  [ -n "$vscode_cli" ] && \
+    ( "$vscode_cli" --new-window "$PROJECT_PATH" >/dev/null 2>&1 & ) || true
 fi
 echo ""
