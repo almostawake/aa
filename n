@@ -45,8 +45,18 @@ HTTP_LOG="${HTTP_LOG:-/tmp/if-new.log}"
 TEMPLATE_REPO="https://github.com/almostawake/if.git"
 NODE_MAJOR="22"
 JAVA_VERSION="21"
-MARKER_START="# >>> if install >>>"
-MARKER_END="# <<< if install <<<"
+# Legacy single block (pre-2026-05) — still stripped on upgrade so users
+# migrating off it don't end up with a stale block alongside the new pair.
+OLD_MARKER_START="# >>> if install >>>"
+OLD_MARKER_END="# <<< if install <<<"
+# Current layout — two blocks. PRE holds overridable defaults and sits
+# ABOVE the user's own ~/.zshrc content (so their PROMPT/aliases win);
+# POST holds appended PATH and sits BELOW it (so locally-installed tools
+# win and the git-plumbing guard sees a fully-resolved PATH).
+PRE_START="# >>> if pre >>>"
+PRE_END="# <<< if pre <<<"
+POST_START="# >>> if post >>>"
+POST_END="# <<< if post <<<"
 
 mkdir -p "$IF_HOME"
 : > "$INSTALL_LOG"
@@ -1248,10 +1258,11 @@ _run_checks() {
     fail_row "Dock missing VS Code pin"
   fi
 
-  if [ -f "$HOME/.zshrc" ] && grep -qF "$MARKER_START" "$HOME/.zshrc"; then
-    pass_row "~/.zshrc has the if-install marker block"
+  if [ -f "$HOME/.zshrc" ] && grep -qF "$PRE_START" "$HOME/.zshrc" \
+                           && grep -qF "$POST_START" "$HOME/.zshrc"; then
+    pass_row "~/.zshrc has the if pre + post marker blocks"
   else
-    fail_row "~/.zshrc missing the if-install marker block"
+    fail_row "~/.zshrc missing the if pre/post marker blocks"
   fi
 
   [ "$CHECK_FAILS" -eq 0 ]
@@ -1274,9 +1285,28 @@ _check_only_run() {
 # =====================================================================
 # 8. ZSHRC MARKER BLOCK
 # =====================================================================
-# Always run — idempotent. Strips any prior block and rewrites. Catches
-# users migrating from the old `i` + `setup-project` aliases that point
-# at dead `~/.if/staging/...` paths.
+# Always run — idempotent. Strips every if-managed block (the legacy
+# single block and the current pre/post pair) and rewrites both. Also
+# catches users migrating from the old `i` + `setup-project` aliases
+# that point at dead `~/.if/staging/...` paths.
+#
+# Two blocks, by design — mixed users (a dep or two installed locally,
+# the rest provided by `if`) need both:
+#   PRE  — overridable defaults (PROMPT, aliases, scalar env). Goes
+#          ABOVE the user's own ~/.zshrc content so their definitions,
+#          sourced afterwards, win. The PROMPT here is only a fallback
+#          for users who set none of their own.
+#   POST — `if`'s toolchain on PATH, APPENDED (not prepended) so any
+#          tool the user installed themselves takes precedence; `if`
+#          only fills the gaps. Goes BELOW the user's content so PATH
+#          is fully resolved before the git-plumbing guard runs —
+#          GIT_EXEC_PATH/DYLD only get set when `if`'s git is actually
+#          the active git, never bolted onto someone else's git.
+# Re-runs are idempotent: canonical positions are top (pre) and bottom
+# (post), so strip + reinsert reproduces the same file byte-for-byte.
+# PROJECT_DIR is deliberately NOT written by either block — set
+# `export PROJECT_DIR=...` in your own ~/.zshrc content (it sits
+# between the blocks and survives re-runs untouched).
 
 _write_zshrc() {
   local zshrc="$HOME/.zshrc"
@@ -1285,52 +1315,99 @@ _write_zshrc() {
     local ts; ts=$(date +%Y%m%d-%H%M)
     cp "$zshrc" "${zshrc}.${ts}.bak"
   fi
-  if grep -qF "$MARKER_START" "$zshrc"; then
-    local tmpf; tmpf=$(mktemp)
-    awk -v s="$MARKER_START" -v e="$MARKER_END" '
-      $0 == s { skip=1; next }
-      $0 == e { skip=0; next }
-      !skip  { print }
-    ' "$zshrc" > "$tmpf"
-    mv "$tmpf" "$zshrc"
-  fi
-  local jh_value
+
+  # JAVA_HOME / java bin dir — bundle layout differs darwin vs linux.
+  local jh jbin
   if [ "$OS" = "darwin" ]; then
-    jh_value="\$HOME/.if/java/Contents/Home"
+    jh="\$HOME/.if/java/Contents/Home"
   else
-    jh_value="\$HOME/.if/java"
+    jh="\$HOME/.if/java"
   fi
+  jbin="$jh/bin"
+
+  local pref postf bodyf
+  pref=$(mktemp); postf=$(mktemp); bodyf=$(mktemp)
+
+  # --- PRE block: overridable defaults ---
   {
-    [ -s "$zshrc" ] && printf '\n'
-    printf '%s\n' "$MARKER_START"
-    printf 'export PATH="$HOME/.if/node/bin:$PATH"\n'
-    printf 'export PATH="$HOME/.if/claude/bin:$PATH"\n'
-    printf 'export PATH="$HOME/.if/gh/bin:$PATH"\n'
-    printf 'export PATH="$HOME/.if/jq/bin:$PATH"\n'
-    printf '[ -x "$HOME/.if/vscode/bin/code" ] && export PATH="$HOME/.if/vscode/bin:$PATH"\n'
-    printf '[ -x "$HOME/.if/git/bin/git" ] && export PATH="$HOME/.if/git/bin:$PATH"\n'
-    printf '[ -d "$HOME/.if/git/libexec/git-core" ] && export GIT_EXEC_PATH="$HOME/.if/git/libexec/git-core"\n'
-    printf '[ -d "$HOME/.if/git/lib" ] && export DYLD_FALLBACK_LIBRARY_PATH="$HOME/.if/git/lib:$HOME/lib:/usr/local/lib:/usr/lib"\n'
-    printf 'export JAVA_HOME="%s"\n' "$jh_value"
-    printf 'export PATH="$JAVA_HOME/bin:$PATH"\n'
-    printf 'export NPM_CONFIG_CACHE="$HOME/.if/npm-cache"\n'
-    # PROJECT_DIR is deliberately NOT exported here. n falls back to
-    # $HOME/Projects when the env var is unset; to override per machine
-    # (e.g. ~/_code), set `export PROJECT_DIR=...` somewhere OUTSIDE
-    # this marker block — anywhere in ~/.zshrc, ~/.zshenv, or a profile
-    # fragment — and it'll survive re-runs (this block is rewritten on
-    # every n install pass and would clobber any value put here).
-    # Stop Claude Code auto-installing its VS Code extension when launched
-    # from a VS Code terminal (we install our own VS Code with extensions baked in).
-    printf 'export CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1\n'
-    # Prompt: [user] cwd > — short, no hostname, leaves room on narrow terms.
+    printf '%s\n' "$PRE_START"
+    printf '%s\n' "# Defaults from the 'if' installer (almostawake.com/n). This block"
+    printf '%s\n' "# sits ABOVE your own ~/.zshrc content — anything you define below,"
+    printf '%s\n' "# including PROMPT, overrides it. Rewritten on every n run."
+    printf '%s\n' 'export CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1'
+    printf '%s\n' 'export NPM_CONFIG_CACHE="$HOME/.if/npm-cache"'
+    printf '[ -d "%s" ] && export JAVA_HOME="%s"\n' "$jh" "$jh"
     printf '%s\n' "PROMPT='[%n] %~ > '"
-    printf "alias cc='claude --dangerously-skip-permissions'\n"
-    printf "alias ccc='claude --dangerously-skip-permissions --continue'\n"
-    printf "alias ccr='claude --dangerously-skip-permissions --resume'\n"
-    printf "alias n='curl -fsSL https://almostawake.com/n | bash -s --'\n"
-    printf '%s\n' "$MARKER_END"
-  } >> "$zshrc"
+    printf '%s\n' "alias cc='claude --dangerously-skip-permissions'"
+    printf '%s\n' "alias ccc='claude --dangerously-skip-permissions --continue'"
+    printf '%s\n' "alias ccr='claude --dangerously-skip-permissions --resume'"
+    printf '%s\n' "alias n='curl -fsSL https://almostawake.com/n | bash -s --'"
+    printf '%s\n' "$PRE_END"
+  } > "$pref"
+
+  # --- POST block: appended PATH + guarded git plumbing ---
+  {
+    printf '%s\n' "$POST_START"
+    printf '%s\n' "# 'if' toolchain PATH — APPENDED so any tool you installed yourself"
+    printf '%s\n' "# takes precedence; these only fill in dependencies you lack. This"
+    printf '%s\n' "# block sits BELOW your own ~/.zshrc content. Rewritten on every n run."
+    printf '%s\n' '_if_path() { [ -d "$1" ] || return; case ":$PATH:" in *":$1:"*) ;; *) export PATH="$PATH:$1" ;; esac; }'
+    printf '%s\n' '_if_path "$HOME/.if/node/bin"'
+    printf '%s\n' '_if_path "$HOME/.if/claude/bin"'
+    printf '%s\n' '_if_path "$HOME/.if/gh/bin"'
+    printf '%s\n' '_if_path "$HOME/.if/jq/bin"'
+    printf '%s\n' '_if_path "$HOME/.if/git/bin"'
+    printf '%s\n' '_if_path "$HOME/.if/vscode/bin"'
+    printf '_if_path "%s"\n' "$jbin"
+    printf '%s\n' 'unset -f _if_path'
+    printf '%s\n' '# git plumbing — only when the if-bundled git is the active git, never'
+    printf '%s\n' '# bolted onto someone else'\''s git (which the appended PATH may prefer).'
+    printf '%s\n' 'if [ "$(command -v git 2>/dev/null)" = "$HOME/.if/git/bin/git" ]; then'
+    printf '%s\n' '  [ -d "$HOME/.if/git/libexec/git-core" ] && export GIT_EXEC_PATH="$HOME/.if/git/libexec/git-core"'
+    printf '%s\n' '  [ -d "$HOME/.if/git/lib" ] && export DYLD_FALLBACK_LIBRARY_PATH="$HOME/.if/git/lib:$HOME/lib:/usr/local/lib:/usr/lib"'
+    printf '%s\n' 'fi'
+    printf '%s\n' "$POST_END"
+  } > "$postf"
+
+  # Strip every if-managed block — the legacy single block and the
+  # current pre/post pair — leaving only the user's own lines in bodyf.
+  awk -v os="$OLD_MARKER_START" -v oe="$OLD_MARKER_END" \
+      -v ps="$PRE_START" -v pe="$PRE_END" \
+      -v qs="$POST_START" -v qe="$POST_END" '
+    $0==os || $0==ps || $0==qs { skip=1; next }
+    $0==oe || $0==pe || $0==qe { skip=0; next }
+    !skip { print }
+  ' "$zshrc" > "$bodyf"
+
+  # A leading #! shebang stays on line 1; the pre block goes just below
+  # it. Detect it so the body awk drops it from the trimmed middle.
+  local has_shebang=0 firstline=""
+  IFS= read -r firstline < "$bodyf" || true
+  case "$firstline" in '#!'*) has_shebang=1 ;; esac
+
+  # Assemble: [shebang] + pre + blank + trimmed user body + blank + post.
+  # Trimming the body's bracketing blank lines keeps re-runs idempotent.
+  {
+    if [ "$has_shebang" -eq 1 ]; then
+      printf '%s\n\n' "$firstline"
+    fi
+    cat "$pref"
+    awk -v skip1="$has_shebang" '
+      { line[NR]=$0 }
+      END {
+        start = (skip1=="1") ? 2 : 1
+        first=0; last=0
+        for (i=start;i<=NR;i++)
+          if (line[i] ~ /[^[:space:]]/) { if (first==0) first=i; last=i }
+        print ""
+        for (i=first;first>0 && i<=last;i++) print line[i]
+        if (first>0) print ""
+      }
+    ' "$bodyf"
+    cat "$postf"
+  } > "${zshrc}.tmp"
+  mv "${zshrc}.tmp" "$zshrc"
+  rm -f "$pref" "$postf" "$bodyf"
 }
 
 # =====================================================================
