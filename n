@@ -62,8 +62,9 @@ mkdir -p "$IF_HOME"
 : > "$INSTALL_LOG"
 
 # Snapshot the invocation directory before anything else. Used later to
-# probe for an existing .env.auth.json the user wants to reuse when
-# spinning up a sibling project from inside an already-provisioned one.
+# probe for an existing EMAIL_OF_GOOGLE_HOSTING_ACCOUNT in the cwd's
+# .env, so a sibling project spun up from inside an already-provisioned
+# one silently reuses the same Google account.
 INVOCATION_CWD="$PWD"
 
 say()     { printf '%s\n' "$*"; }
@@ -1565,29 +1566,33 @@ fi
 # =====================================================================
 # 10. SETTING UP NEW PROJECT (intro + auth happens in row UI below)
 # =====================================================================
-# No staging — cmd-auth.mjs is fetched to ~/.if/cmd-auth.mjs each run
-# and run there. Its default behaviour writes the cred next to itself,
-# so we get ~/.if/.env.auth.json. After the project is cloned we MOVE
-# the cred into <project>/.env.auth.json (not copy — no central state).
+# Creds live at ~/.if/creds/.env.auth.<email>.json — one file per
+# Google account, shared across every project. We never copy them into
+# project trees. cmd-auth.mjs is fetched fresh each run into ~/.if/.
+#
+# Account resolution:
+#  - if the cwd holds an existing if-project .env with
+#    EMAIL_OF_GOOGLE_HOSTING_ACCOUNT set, we adopt that account silently
+#    (refresh-if-stale, no prompt for who to sign in as);
+#  - otherwise we run cmd-auth.mjs --discover, which does a fresh OAuth
+#    flow without naming an account up front and writes the cred file
+#    using the email the user picked in the browser.
 
 echo ""
 echo "setting up google hosting"
 echo ""
 
-# Wipe any stale cred from a prior failed run — otherwise cmd-auth.mjs
-# would probe it and silently bind the new project to the wrong account.
-# Then, if the user ran n from inside a project that already has its
-# own .env.auth.json (e.g. spinning up a sibling project), seed
-# $IF_HOME with that cred. cmd-auth.mjs probes it next: silently
-# reuses if still valid, refreshes / re-prompts the browser flow if
-# stale.
-rm -f "$IF_HOME/.env.auth.json"
-if [ -f "$INVOCATION_CWD/.env.auth.json" ]; then
-  cp "$INVOCATION_CWD/.env.auth.json" "$IF_HOME/.env.auth.json"
+# Reuse-or-discover: read EMAIL_OF_GOOGLE_HOSTING_ACCOUNT from the cwd's
+# .env if present. Empty / missing means we'll run --discover later.
+REUSE_EMAIL=""
+if [ -f "$INVOCATION_CWD/.env" ]; then
+  REUSE_EMAIL=$(grep -E '^EMAIL_OF_GOOGLE_HOSTING_ACCOUNT=' "$INVOCATION_CWD/.env" \
+    | head -1 | sed -E 's/^EMAIL_OF_GOOGLE_HOSTING_ACCOUNT=//' \
+    | sed -E "s/^['\"]//; s/['\"]\$//" | tr -d '\r' )
 fi
 
 # Fetch cmd-auth.mjs fresh — small file, idempotent. Lands at
-# ~/.if/cmd-auth.mjs; cred will land alongside as .env.auth.json.
+# ~/.if/cmd-auth.mjs; cred files land at ~/.if/creds/.env.auth.<email>.json.
 curl -fsSL https://raw.githubusercontent.com/almostawake/if/main/cmd-auth.mjs \
   -o "$IF_HOME/cmd-auth.mjs" >> "$INSTALL_LOG" 2>&1 \
   || die "couldn't fetch cmd-auth.mjs"
@@ -2281,15 +2286,14 @@ PROV_N=${#PROV_PENDING[@]}
 # last row) on entry AND on exit.
 # ---------------------------------------------------------------------
 
-# Row 0: browser sign-in. Opens a 1-line section showing a static
-# message while node cmd-auth.mjs runs in the background. cmd-auth's
-# own progress goes to log; the user's visible cue is the browser
-# popping up.
+# Row 0: browser sign-in. Two paths:
+#  - REUSE_EMAIL set (cwd's .env named an account): refresh that account
+#    via `cmd-auth.mjs <email>` — silent if cached cred is still valid.
+#  - Otherwise: `cmd-auth.mjs --discover` runs OAuth without naming an
+#    account up front; the email comes from userinfo and the cred lands
+#    at ~/.if/creds/.env.auth.<discovered>.json. The discovered email is
+#    printed to stdout, so we capture it for EMAIL.
 _prov_signin() {
-  # No section / no inline message. Browser pops up over the terminal
-  # so the user already knows what to do. Row sits at "running"
-  # (--->) until cmd-auth returns; then orchestrator flips it to ✓.
-  #
   # Defensive Chrome kill BEFORE cmd-auth.mjs spawns the browser:
   # frees port 9222 so our launcher's Chrome can actually bind it and
   # DevToolsActivePort lands on the right websocket. Always runs even
@@ -2298,12 +2302,21 @@ _prov_signin() {
   # doesn't keep hogging the port.
   _kill_all_chrome >> "$INSTALL_LOG" 2>&1 || true
   local rc=0
-  ( cd "$IF_HOME" && node cmd-auth.mjs ) >> "$INSTALL_LOG" 2>&1 || rc=$?
-  if [ "$rc" -ne 0 ]; then return 1; fi
-  [ -f "$IF_HOME/.env.auth.json" ] || return 1
-  EMAIL=$(perl -MJSON::PP -e 'print decode_json(do { local $/; <STDIN> })->{email} // ""' < "$IF_HOME/.env.auth.json")
-  ACCESS_TOKEN=$(perl -MJSON::PP -e 'print decode_json(do { local $/; <STDIN> })->{tokens}{access_token} // ""' < "$IF_HOME/.env.auth.json")
-  [ -n "$EMAIL" ] && [ -n "$ACCESS_TOKEN" ] || return 1
+  if [ -n "$REUSE_EMAIL" ]; then
+    ( cd "$IF_HOME" && node cmd-auth.mjs "$REUSE_EMAIL" ) >> "$INSTALL_LOG" 2>&1 || rc=$?
+    [ "$rc" -ne 0 ] && return 1
+    EMAIL="$REUSE_EMAIL"
+  else
+    # --discover prints the picked email to stdout; cmd-auth's own
+    # progress goes to stderr → log.
+    EMAIL=$( ( cd "$IF_HOME" && node cmd-auth.mjs --discover ) 2>> "$INSTALL_LOG" ) || rc=$?
+    [ "$rc" -ne 0 ] && return 1
+    [ -z "$EMAIL" ] && return 1
+  fi
+  local credfile="$IF_HOME/creds/.env.auth.${EMAIL}.json"
+  [ -f "$credfile" ] || return 1
+  ACCESS_TOKEN=$(perl -MJSON::PP -e 'print decode_json(do { local $/; <STDIN> })->{tokens}{access_token} // ""' < "$credfile")
+  [ -n "$ACCESS_TOKEN" ] || return 1
   log "n: signed in as $EMAIL"
   # Pre-flight billing check, gated to before any project work.
   if ! preflight_check; then
@@ -2521,28 +2534,19 @@ _clone_template() {
          commit -q -m "initial: $PID from if template" )
 }
 
-# Move (not copy) the auth cred from ~/.if/ into the project. We
-# deliberately don't keep a central copy — fresh sign-in per project,
-# each project owns its own cred for future `npm run deploy*`.
-_move_auth_cred() {
-  if [ -f "$IF_HOME/.env.auth.json" ]; then
-    mv "$IF_HOME/.env.auth.json" "$PROJECT_PATH/.env.auth.json"
-    chmod 600 "$PROJECT_PATH/.env.auth.json"
-  fi
-}
-
 # Seed root .env from the template's .env.example — copying keeps n in sync
 # as the template grows keys (same pattern as _write_functions_env). The
 # example carries each key as an empty `key=` placeholder; n fills the
 # per-project values here. .env is gitignored — local to this machine.
-# ACCOUNT_EMAIL pins the gcloud account so multi-account machines deploy from
-# the right one regardless of `gcloud config set account` drift.
+# EMAIL_OF_GOOGLE_HOSTING_ACCOUNT pins the account: cmd-auth.mjs reads it
+# to know which ~/.if/creds/.env.auth.<email>.json to use, and cmd-deploy
+# .mjs reads the same to locate the OAuth refresh token.
 _write_env() {
   local f="$PROJECT_PATH/.env"
   cp "$PROJECT_PATH/.env.example" "$f"
   sed -i '' "s|^THIS_PROJECT_ID_ON_GOOGLE_HOSTING=\$|THIS_PROJECT_ID_ON_GOOGLE_HOSTING=$PID|" "$f"
   sed -i '' "s|^THIS_PROJECT_REGION_ON_GOOGLE_HOSTING=\$|THIS_PROJECT_REGION_ON_GOOGLE_HOSTING=$REGION|" "$f"
-  sed -i '' "s|^ACCOUNT_EMAIL=\$|ACCOUNT_EMAIL=$EMAIL|" "$f"
+  sed -i '' "s|^EMAIL_OF_GOOGLE_HOSTING_ACCOUNT=\$|EMAIL_OF_GOOGLE_HOSTING_ACCOUNT=$EMAIL|" "$f"
 }
 
 # Fetch the Firebase Web config and write client/.env. The "apiKey" is a
@@ -2693,10 +2697,11 @@ _seed_user() {
 _install_deps() { ( cd "$PROJECT_PATH" && npm run install:all ); }
 
 # `npm run deploy` invokes cmd-deploy.mjs (a thin firebase-tools
-# wrapper). It reads THIS_PROJECT_ID_ON_GOOGLE_HOSTING from .env,
-# synthesizes ADC creds from .env.auth.json, then shells out to
-# firebase-tools (which builds via firebase.json predeploy + pushes
-# hosting / firestore rules + indexes / storage rules / functions).
+# wrapper). It reads THIS_PROJECT_ID_ON_GOOGLE_HOSTING + EMAIL_OF_GOOGLE
+# _HOSTING_ACCOUNT from .env, synthesizes ADC creds from
+# ~/.if/creds/.env.auth.<email>.json, then shells out to firebase-tools
+# (which builds via firebase.json predeploy + pushes hosting / firestore
+# rules + indexes / storage rules / functions).
 _deploy_to_fb() {
   ( cd "$PROJECT_PATH" && npm run deploy )
 }
@@ -2725,7 +2730,7 @@ DEPLOY_FNS=(
 )
 DEPLOY_N=${#DEPLOY_PENDING[@]}
 
-_dep_download() { _clone_template && _move_auth_cred; }
+_dep_download() { _clone_template; }
 _dep_tailor()   { _write_env && _write_client_env && _write_functions_env && _seed_user && _trust_path "$PROJECT_PATH"; }
 _dep_deploy()   { _install_deps && _deploy_to_fb; }
 
