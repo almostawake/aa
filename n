@@ -2100,6 +2100,106 @@ configure_auth() {
   if [ "$code" != "200" ]; then return 1; fi
 }
 
+# Grant the Cloud Functions runtime service account permission to
+# **self-impersonate** for the IAM Credentials API — specifically
+# `roles/iam.serviceAccountTokenCreator` on itself.
+#
+# Why: in the if template, all Cloud Storage objects are fully private
+# (storage.rules denies everything), and any client read goes through
+# a callable that mints a short-lived V4 signed URL via the Admin SDK's
+# getSignedUrl(). In the Cloud Functions runtime there's no service-
+# account *private key* locally, so getSignedUrl falls back to signing
+# via the IAM Credentials API — which requires this self-binding. With
+# it, signed URLs work; without it, every callable signing attempt 500s
+# with a permissions error and every private-Storage object shows
+# "audio unavailable" / similar to the user.
+#
+# Asserted unconditionally on every n project so the pattern is uniform:
+# the template ships ready for private Storage + callable-minted URLs,
+# even if the very first feature doesn't use it yet. Cost is one IAM
+# binding per project; the binding is inert when unused.
+#
+# Idempotent: reads the existing policy, adds the binding only when
+# missing, writes back with the captured etag.
+grant_token_creator() {
+  local pid="$1"
+  http_log "grant_token_creator start: pid=$pid"
+
+  # Project number → SA email. Cloud Functions Gen 2 / Cloud Run use the
+  # Compute Engine default service account as the runtime identity.
+  local proj_tmp; proj_tmp=$(mktemp)
+  local proj_code proj_body
+  proj_code=$(curl -s -o "$proj_tmp" -w "%{http_code}" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    "https://cloudresourcemanager.googleapis.com/v1/projects/$pid")
+  proj_body=$(cat "$proj_tmp"); rm -f "$proj_tmp"
+  http_log "grant_token_creator $pid lookup → HTTP $proj_code body: $(log_trunc "$proj_body")"
+  if [ "$proj_code" != "200" ]; then return 1; fi
+
+  local project_number
+  project_number=$(perl -MJSON::PP -e '
+    my $j = decode_json(join("", <STDIN>));
+    print $j->{projectNumber} if defined $j->{projectNumber};
+  ' <<< "$proj_body")
+  if [ -z "$project_number" ]; then
+    http_log "grant_token_creator: no projectNumber in response"
+    return 1
+  fi
+
+  local sa="${project_number}-compute@developer.gserviceaccount.com"
+  local sa_member="serviceAccount:${sa}"
+  local sa_url="https://iam.googleapis.com/v1/projects/$pid/serviceAccounts/${sa}"
+  http_log "grant_token_creator $pid sa=$sa"
+
+  # Read current policy. Empty/new policies come back with just an etag
+  # (e.g. {"etag":"ACAB"}) and no bindings array — handled by the perl below.
+  local get_tmp; get_tmp=$(mktemp)
+  local get_code get_body
+  get_code=$(curl -s -o "$get_tmp" -w "%{http_code}" -X POST \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "X-Goog-User-Project: $pid" \
+    -H "Content-Type: application/json" \
+    -d '{}' \
+    "${sa_url}:getIamPolicy")
+  get_body=$(cat "$get_tmp"); rm -f "$get_tmp"
+  http_log "grant_token_creator $pid getIamPolicy → HTTP $get_code body: $(log_trunc "$get_body")"
+  if [ "$get_code" != "200" ]; then return 1; fi
+
+  # Merge: add the SA-on-itself binding if not already present, keep any
+  # other bindings untouched, preserve the etag for the write below.
+  local merged
+  merged=$(BODY="$get_body" MEMBER="$sa_member" perl -MJSON::PP -e '
+    my $j = decode_json($ENV{BODY});
+    my $member = $ENV{MEMBER};
+    my $role = "roles/iam.serviceAccountTokenCreator";
+    $j->{bindings} //= [];
+    my $b;
+    for my $x (@{$j->{bindings}}) {
+      if (($x->{role} // "") eq $role) { $b = $x; last; }
+    }
+    if (!$b) {
+      $b = { role => $role, members => [] };
+      push @{$j->{bindings}}, $b;
+    }
+    unless (grep { $_ eq $member } @{$b->{members}}) {
+      push @{$b->{members}}, $member;
+    }
+    print encode_json({ policy => $j });
+  ') || { http_log "grant_token_creator: policy merge failed"; return 1; }
+
+  local set_tmp; set_tmp=$(mktemp)
+  local set_code set_body
+  set_code=$(curl -s -o "$set_tmp" -w "%{http_code}" -X POST \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "X-Goog-User-Project: $pid" \
+    -H "Content-Type: application/json" \
+    -d "$merged" \
+    "${sa_url}:setIamPolicy")
+  set_body=$(cat "$set_tmp"); rm -f "$set_tmp"
+  http_log "grant_token_creator $pid setIamPolicy → HTTP $set_code body: $(log_trunc "$set_body")"
+  if [ "$set_code" != "200" ]; then return 1; fi
+}
+
 # Validate a GCP project ID. Collects ALL violated rules so the user
 # sees every rule they're breaking at once, not just the first.
 VALIDATION_ERRORS=()
@@ -2192,6 +2292,7 @@ PROV_PENDING=(
   "create firestore (sydney)"
   "create storage bucket (sydney)"
   "configure auth providers"
+  "grant runtime sa self-impersonation"
 )
 PROV_RUNNING=(
   "browser sign-in"
@@ -2220,6 +2321,7 @@ PROV_RUNNING=(
   "creating firestore (sydney)"
   "creating storage bucket (sydney)"
   "configuring auth providers"
+  "granting runtime sa self-impersonation"
 )
 PROV_DONE=(
   "signed in"
@@ -2248,6 +2350,7 @@ PROV_DONE=(
   "firestore (sydney) created"
   "storage bucket (sydney) created"
   "auth providers configured"
+  "runtime sa self-impersonation granted"
 )
 PROV_FNS=(
   "_prov_signin"
@@ -2276,6 +2379,7 @@ PROV_FNS=(
   "_prov_firestore"
   "_prov_storage"
   "_prov_auth"
+  "_prov_grant_token_creator"
 )
 PROV_N=${#PROV_PENDING[@]}
 
@@ -2430,6 +2534,7 @@ _prov_web_app()                 { create_web_app "$PID"; }
 _prov_firestore()               { create_firestore "$PID"; }
 _prov_storage()                 { create_storage_bucket "$PID"; }
 _prov_auth()                    { configure_auth "$PID"; }
+_prov_grant_token_creator()     { grant_token_creator "$PID"; }
 
 draw_prov_row() {
   local i="$1" state="$2"

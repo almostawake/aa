@@ -22,9 +22,13 @@ A single bash script that runs in three phases on a fresh macOS box
   `~/.zshrc` marker block (PATH, env, aliases).
 - **project** — Google OAuth sign-in, GCP project create, ~18 API
   enables, Firebase add, web app + Firestore + Storage + Auth config,
-  clone of the [`if`](https://github.com/almostawake/if) SvelteKit
-  template into `$PROJECT_DIR/<project-id>`, seed the user's email
-  into the Firestore users whitelist, deploy to Firebase Hosting.
+  `roles/iam.serviceAccountTokenCreator` self-binding on the Cloud
+  Functions runtime SA (lets callables mint V4 signed URLs for the
+  template's private-Storage + signed-URL access pattern — see
+  `if/docs/CLAUDE-STACK.md` "Storage privacy posture"), clone of the
+  [`if`](https://github.com/almostawake/if) SvelteKit template into
+  `$PROJECT_DIR/<project-id>`, seed the user's email into the
+  Firestore users whitelist, deploy to Firebase Hosting.
 
 Idempotent. Re-runs skip already-installed tooling, re-assert config
 (no clobber of user additions), and go straight to "pick or create a
