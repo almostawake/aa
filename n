@@ -2289,8 +2289,8 @@ PROV_PENDING=(
   "enable google calendar api"
   "enable api keys api"
   "create web app config"
-  "create firestore (sydney)"
-  "create storage bucket (sydney)"
+  "create firestore"
+  "create storage bucket"
   "configure auth providers"
   "grant runtime sa self-impersonation"
 )
@@ -2318,8 +2318,8 @@ PROV_RUNNING=(
   "enabling google calendar api"
   "enabling api keys api"
   "creating web app config"
-  "creating firestore (sydney)"
-  "creating storage bucket (sydney)"
+  "creating firestore"
+  "creating storage bucket"
   "configuring auth providers"
   "granting runtime sa self-impersonation"
 )
@@ -2347,8 +2347,8 @@ PROV_DONE=(
   "google calendar api enabled"
   "api keys api enabled"
   "web app config created"
-  "firestore (sydney) created"
-  "storage bucket (sydney) created"
+  "firestore created"
+  "storage bucket created"
   "auth providers configured"
   "runtime sa self-impersonation granted"
 )
