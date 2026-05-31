@@ -2414,8 +2414,10 @@ PROV_N=${#PROV_PENDING[@]}
 
 # Row 0: browser sign-in. Two paths:
 #  - ACCOUNT set (--user or IF_DEFAULT_GOOGLE_USER): act on that account
-#    via `cmd-auth.mjs <email>` — silent if cached cred is still valid,
-#    else login_hint into the browser.
+#    via `cmd-auth.mjs <email> --token` — silent if cached cred is still
+#    valid, else login_hint into the browser. --token (not bare auth) so
+#    no project/ADC is required this early; n reads the token from the
+#    cred file below regardless.
 #  - Otherwise: `cmd-auth.mjs --discover` runs OAuth without naming an
 #    account up front; the email comes from userinfo and the cred lands
 #    at ~/.if/creds/.env.auth.<discovered>.json. The discovered email is
@@ -2431,7 +2433,13 @@ _prov_signin() {
   _kill_all_chrome >> "$INSTALL_LOG" 2>&1 || true
   local rc=0
   if [ -n "$ACCOUNT" ]; then
-    ( cd "$IF_HOME" && node cmd-auth.mjs "$ACCOUNT" ) >> "$INSTALL_LOG" 2>&1 || rc=$?
+    # --token (not bare auth): ensure/refresh/grant a valid token for the
+    # account WITHOUT requiring a project (none exists yet at sign-in) or
+    # writing ADC. n drives provisioning with the bearer token it reads
+    # from the cred file below; ADC is set up later in the project context
+    # by the template's own cmd-auth. Token → /dev/null so it never lands
+    # in the log; cmd-auth's progress/errors still go there via stderr.
+    ( cd "$IF_HOME" && node cmd-auth.mjs "$ACCOUNT" --token ) >/dev/null 2>> "$INSTALL_LOG" || rc=$?
     [ "$rc" -ne 0 ] && return 1
     EMAIL="$ACCOUNT"
   else
