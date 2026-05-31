@@ -61,14 +61,29 @@ POST_END="# <<< if post <<<"
 mkdir -p "$IF_HOME"
 : > "$INSTALL_LOG"
 
-# Snapshot the invocation directory before anything else. Used later to
-# probe for an existing EMAIL_OF_GOOGLE_HOSTING_ACCOUNT in the cwd's
-# .env, so a sibling project spun up from inside an already-provisioned
-# one silently reuses the same Google account.
-INVOCATION_CWD="$PWD"
+# ~/.if/.env — central, user-editable config shared by n and cmd-auth.mjs.
+# Holds IF_PROJECT_DIR (the project parent) and IF_DEFAULT_GOOGLE_USER (the
+# account we provision/deploy as). Seeded write-once (see _seed_if_env);
+# edit it by hand to override. Sourced here so both vars are in scope for
+# the rest of this run; the zshrc PRE block sources the same file for
+# interactive shells. Keep it bash-source-safe — KEY="value", no spaces
+# around =, values cmd-auth reads must not rely on shell expansion.
+[ -f "$IF_HOME/.env" ] && . "$IF_HOME/.env" || true
 
 say()     { printf '%s\n' "$*"; }
 die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+# Seed a key into ~/.if/.env if absent (write-once — never clobbers a
+# value the user has edited). $2 is written verbatim inside double quotes,
+# so pass shell-expandable literals single-quoted (e.g. '$HOME/Projects')
+# to have them expand on source rather than at seed time. Both n and
+# cmd-auth.mjs read this file; keep values bash-source-safe.
+_seed_if_env() {
+  local f="$IF_HOME/.env" key="$1" val="$2"
+  [ -e "$f" ] || { : > "$f"; chmod 600 "$f"; }
+  grep -qE "^${key}=" "$f" && return 0
+  printf '%s="%s"\n' "$key" "$val" >> "$f"
+}
 
 # Args.
 #
@@ -99,6 +114,11 @@ die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 #                         or isn't accessible we surface a fatal error
 #                         at the create-project row, same style as
 #                         other fatals.
+#   --user <email>        provision/deploy as this Google account instead
+#                         of IF_DEFAULT_GOOGLE_USER (~/.if/.env). Reuses a
+#                         cached cred if present, otherwise feeds the email
+#                         as login_hint into the browser sign-in. The first
+#                         account ever used seeds IF_DEFAULT_GOOGLE_USER.
 #   --region <id>         region for the new project's Firestore + Storage
 #                         (and therefore its Cloud Functions, which deploy
 #                         alongside the data). Single GCP region only, e.g.
@@ -125,6 +145,7 @@ die()     { printf 'error: %s\n' "$*" >&2; exit 1; }
 #                         zshrc marker). Lists every mismatch. Exits 0
 #                         if clean, 1 otherwise.
 REUSE_PROJECT_ID=""
+USER_ACCOUNT=""
 PROJECT_ONLY=false
 INSTALL_ONLY=false
 CHECK_ONLY=false
@@ -139,6 +160,9 @@ while [ "$#" -gt 0 ]; do
     --reuse-project)   [ -n "${2-}" ] || die "--reuse-project requires a project id"
                        REUSE_PROJECT_ID="$2"; shift 2 ;;
     --reuse-project=*) REUSE_PROJECT_ID="${1#*=}"; shift ;;
+    --user)            [ -n "${2-}" ] || die "--user requires a google account email"
+                       USER_ACCOUNT="$2"; shift 2 ;;
+    --user=*)          USER_ACCOUNT="${1#*=}"; shift ;;
     --region)          [ -n "${2-}" ] || die "--region requires a region id"
                        REGION="$2"; shift 2 ;;
     --region=*)        REGION="${1#*=}"; shift ;;
@@ -941,7 +965,7 @@ _apply_claude_config() {
   ' < "$settings" > "$tmp" && mv "$tmp" "$settings"
 
   # ~/.claude.json — seed if absent (with theme auto-detect), then
-  # always merge in the chrome-devtools MCP server. Trust PROJECT_DIR
+  # always merge in the chrome-devtools MCP server. Trust the project dir
   # last so the entry appears alongside whatever else lives there.
   local claude_json="$HOME/.claude.json"
   if [ ! -f "$claude_json" ]; then
@@ -969,22 +993,22 @@ _apply_claude_config() {
     print JSON::PP->new->pretty->canonical->encode($j);
   ' < "$claude_json" > "$tmp" && mv "$tmp" "$claude_json"
 
-  # Pre-trust PROJECT_DIR so the "Do you trust this folder?" prompt
+  # Pre-trust the project dir so the "Do you trust this folder?" prompt
   # doesn't fire on first launch from VS Code / wherever users typically
   # open Claude. Was inside _install_claude pre-refactor.
-  _trust_path "${PROJECT_DIR:-$HOME/Projects}"
+  _trust_path "${IF_PROJECT_DIR:-$HOME/Projects}"
 }
 
-# Create PROJECT_DIR workspace, point Finder there, pin VS Code +
+# Create the project workspace, point Finder there, pin VS Code +
 # Chrome-with-Claude to the Dock.
 #
-# PROJECT_DIR (defaults to ~/Projects) is the user's project parent.
+# IF_PROJECT_DIR (defaults to ~/Projects) is the user's project parent.
 # Running claude in ~ makes it enumerate Documents, Downloads, Photos
 # Library, Reminders, etc., which fires macOS TCC prompts — an empty
 # project parent avoids all of that.
 _configure_workspace() {
   [ "$OS" = "darwin" ] || return 0
-  local proj_dir="${PROJECT_DIR:-$HOME/Projects}"
+  local proj_dir="${IF_PROJECT_DIR:-$HOME/Projects}"
   mkdir -p "$proj_dir"
 
   # Add VS Code + Chrome-with-Claude to the Dock left side, immediately
@@ -1302,9 +1326,10 @@ _check_only_run() {
 #          the active git, never bolted onto someone else's git.
 # Re-runs are idempotent: canonical positions are top (pre) and bottom
 # (post), so strip + reinsert reproduces the same file byte-for-byte.
-# PROJECT_DIR is deliberately NOT written by either block — set
-# `export PROJECT_DIR=...` in your own ~/.zshrc content (it sits
-# between the blocks and survives re-runs untouched).
+# Scalar config (IF_PROJECT_DIR, IF_DEFAULT_GOOGLE_USER) is NOT written
+# into the block — PRE just sources ~/.if/.env, which n seeds write-once
+# and the user edits to override. That keeps the block fully regenerable
+# while the values persist across re-runs in their own file.
 
 _write_zshrc() {
   local zshrc="$HOME/.zshrc"
@@ -1332,6 +1357,9 @@ _write_zshrc() {
     printf '%s\n' "# Defaults from the 'if' installer (almostawake.com/n). This block"
     printf '%s\n' "# sits ABOVE your own ~/.zshrc content — anything you define below,"
     printf '%s\n' "# including PROMPT, overrides it. Rewritten on every n run."
+    printf '%s\n' '# Central if config (IF_PROJECT_DIR, IF_DEFAULT_GOOGLE_USER) —'
+    printf '%s\n' '# seeded write-once by n, edit ~/.if/.env to override.'
+    printf '%s\n' '[ -f "$HOME/.if/.env" ] && . "$HOME/.if/.env"'
     printf '%s\n' 'export CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1'
     printf '%s\n' 'export NPM_CONFIG_CACHE="$HOME/.if/npm-cache"'
     printf '[ -d "%s" ] && export JAVA_HOME="%s"\n' "$jh" "$jh"
@@ -1551,6 +1579,7 @@ else
   #                         launcher, strips legacy /Applications URL).
   #   _write_zshrc          marker block, rewritten every run.
   _apply_claude_config >> "$INSTALL_LOG" 2>&1 || true
+  _seed_if_env IF_PROJECT_DIR '$HOME/Projects' >> "$INSTALL_LOG" 2>&1 || true
   _configure_workspace >> "$INSTALL_LOG" 2>&1 || true
   _write_zshrc         >> "$INSTALL_LOG" 2>&1 || true
 
@@ -1570,26 +1599,19 @@ fi
 # Google account, shared across every project. We never copy them into
 # project trees. cmd-auth.mjs is fetched fresh each run into ~/.if/.
 #
-# Account resolution:
-#  - if the cwd holds an existing if-project .env with
-#    EMAIL_OF_GOOGLE_HOSTING_ACCOUNT set, we adopt that account silently
-#    (refresh-if-stale, no prompt for who to sign in as);
-#  - otherwise we run cmd-auth.mjs --discover, which does a fresh OAuth
-#    flow without naming an account up front and writes the cred file
-#    using the email the user picked in the browser.
+# Account resolution (no cwd probing — the cwd is irrelevant):
+#  - --user <email> wins;
+#  - else IF_DEFAULT_GOOGLE_USER from ~/.if/.env (sourced at startup);
+#  - else cmd-auth.mjs --discover, a fresh OAuth flow with no account
+#    named up front, writing the cred under whatever email the user picks.
+# A resolved account goes through `cmd-auth.mjs <email>`: silent if a
+# cached cred is still valid, otherwise login_hint into the browser. The
+# account we end up signed in as seeds IF_DEFAULT_GOOGLE_USER (write-once).
+ACCOUNT="${USER_ACCOUNT:-${IF_DEFAULT_GOOGLE_USER:-}}"
 
 echo ""
 echo "setting up google hosting"
 echo ""
-
-# Reuse-or-discover: read EMAIL_OF_GOOGLE_HOSTING_ACCOUNT from the cwd's
-# .env if present. Empty / missing means we'll run --discover later.
-REUSE_EMAIL=""
-if [ -f "$INVOCATION_CWD/.env" ]; then
-  REUSE_EMAIL=$(grep -E '^EMAIL_OF_GOOGLE_HOSTING_ACCOUNT=' "$INVOCATION_CWD/.env" \
-    | head -1 | sed -E 's/^EMAIL_OF_GOOGLE_HOSTING_ACCOUNT=//' \
-    | sed -E "s/^['\"]//; s/['\"]\$//" | tr -d '\r' )
-fi
 
 # Fetch cmd-auth.mjs fresh — small file, idempotent. Lands at
 # ~/.if/cmd-auth.mjs; cred files land at ~/.if/creds/.env.auth.<email>.json.
@@ -2391,12 +2413,14 @@ PROV_N=${#PROV_PENDING[@]}
 # ---------------------------------------------------------------------
 
 # Row 0: browser sign-in. Two paths:
-#  - REUSE_EMAIL set (cwd's .env named an account): refresh that account
-#    via `cmd-auth.mjs <email>` — silent if cached cred is still valid.
+#  - ACCOUNT set (--user or IF_DEFAULT_GOOGLE_USER): act on that account
+#    via `cmd-auth.mjs <email>` — silent if cached cred is still valid,
+#    else login_hint into the browser.
 #  - Otherwise: `cmd-auth.mjs --discover` runs OAuth without naming an
 #    account up front; the email comes from userinfo and the cred lands
 #    at ~/.if/creds/.env.auth.<discovered>.json. The discovered email is
 #    printed to stdout, so we capture it for EMAIL.
+# Either way, the email we end up as seeds IF_DEFAULT_GOOGLE_USER.
 _prov_signin() {
   # Defensive Chrome kill BEFORE cmd-auth.mjs spawns the browser:
   # frees port 9222 so our launcher's Chrome can actually bind it and
@@ -2406,10 +2430,10 @@ _prov_signin() {
   # doesn't keep hogging the port.
   _kill_all_chrome >> "$INSTALL_LOG" 2>&1 || true
   local rc=0
-  if [ -n "$REUSE_EMAIL" ]; then
-    ( cd "$IF_HOME" && node cmd-auth.mjs "$REUSE_EMAIL" ) >> "$INSTALL_LOG" 2>&1 || rc=$?
+  if [ -n "$ACCOUNT" ]; then
+    ( cd "$IF_HOME" && node cmd-auth.mjs "$ACCOUNT" ) >> "$INSTALL_LOG" 2>&1 || rc=$?
     [ "$rc" -ne 0 ] && return 1
-    EMAIL="$REUSE_EMAIL"
+    EMAIL="$ACCOUNT"
   else
     # --discover prints the picked email to stdout; cmd-auth's own
     # progress goes to stderr → log.
@@ -2421,6 +2445,8 @@ _prov_signin() {
   [ -f "$credfile" ] || return 1
   ACCESS_TOKEN=$(perl -MJSON::PP -e 'print decode_json(do { local $/; <STDIN> })->{tokens}{access_token} // ""' < "$credfile")
   [ -n "$ACCESS_TOKEN" ] || return 1
+  # Seed the default account from whoever we first signed in as.
+  _seed_if_env IF_DEFAULT_GOOGLE_USER "$EMAIL"
   log "n: signed in as $EMAIL"
   # Pre-flight billing check, gated to before any project work.
   if ! preflight_check; then
@@ -2438,7 +2464,7 @@ _prov_signin() {
 _prov_create() {
   PID=""
   PROV_CREATE_FATAL_MSG=""
-  local proj_parent="${PROJECT_DIR:-$HOME/Projects}"
+  local proj_parent="${IF_PROJECT_DIR:-$HOME/Projects}"
   # Reuse mode: no prompt, no section. Just verify the project exists
   # and adopt it. Downstream rows (enable APIs, configure auth, etc.)
   # are all idempotent so they're safe to re-run on an existing project.
@@ -2618,7 +2644,7 @@ provision_all
 # block is one continuous list with consistent styling and error
 # behaviour (✗ on the row, clean message at the bottom, exit).
 
-PROJECT_PARENT="${PROJECT_DIR:-$HOME/Projects}"
+PROJECT_PARENT="${IF_PROJECT_DIR:-$HOME/Projects}"
 PROJECT_PATH="$PROJECT_PARENT/$PID"
 mkdir -p "$PROJECT_PARENT"
 
