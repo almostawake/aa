@@ -2042,14 +2042,18 @@ create_storage_bucket() {
 }
 
 # Configure Firebase Auth providers via Identity Toolkit. Enables
-# anonymous + email-link sign-in, appends "localhost" to
+# anonymous + email-link sign-in and appends "localhost" to
 # authorizedDomains so email links work in local dev (projects created
-# after 2025-04-28 don't include localhost by default), and points the
-# email-link callback at https://<pid>.web.app/auth/action — same origin
-# as the SDK's authDomain (also <pid>.web.app, see _write_client_env)
-# so the magic link lands first-party in Chrome instead of bouncing
-# through <pid>.firebaseapp.com/__/auth/action and losing cookies under
-# third-party-cookie restrictions.
+# after 2025-04-28 don't include localhost by default).
+#
+# We deliberately do NOT customize the email-link callbackUri. Google now
+# blocks notification.sendEmail.* writes on DEFAULT-email projects (HTTP
+# 400 EMAIL_TEMPLATE_UPDATE_NOT_ALLOWED), and it's unnecessary anyway: the
+# client flow (AuthService.sendLink → handleCodeInApp + same-origin
+# /auth/action continue URL, email in localStorage, oobCode in the URL)
+# completes sign-in first-party on <pid>.web.app without depending on any
+# cross-origin cookie. The default firebaseapp.com handler is just a
+# transit redirect — no shared state needed.
 configure_auth() {
   local pid="$1"
   http_log "configure_auth start: pid=$pid"
@@ -2105,9 +2109,9 @@ configure_auth() {
     print encode_json(\@d);
   ') || { http_log "configure_auth: domain merge failed"; return 1; }
 
-  local callback_uri="https://$pid.web.app/auth/action"
+  # Essential config — must succeed or the row fails.
   local body
-  body=$(printf '{"signIn":{"anonymous":{"enabled":true},"email":{"enabled":true,"passwordRequired":false}},"authorizedDomains":%s,"notification":{"sendEmail":{"callbackUri":"%s"}}}' "$domains_json" "$callback_uri")
+  body=$(printf '{"signIn":{"anonymous":{"enabled":true},"email":{"enabled":true,"passwordRequired":false}},"authorizedDomains":%s}' "$domains_json")
 
   local tmp; tmp=$(mktemp)
   local code
@@ -2116,7 +2120,7 @@ configure_auth() {
     -H "X-Goog-User-Project: $pid" \
     -H "Content-Type: application/json" \
     -d "$body" \
-    "https://identitytoolkit.googleapis.com/admin/v2/projects/$pid/config?updateMask=signIn.anonymous,signIn.email,authorizedDomains,notification.sendEmail.callbackUri")
+    "https://identitytoolkit.googleapis.com/admin/v2/projects/$pid/config?updateMask=signIn.anonymous,signIn.email,authorizedDomains")
   local resp; resp=$(cat "$tmp"); rm -f "$tmp"
   http_log "configure_auth $pid → HTTP $code body: $(log_trunc "$resp")"
   if [ "$code" != "200" ]; then return 1; fi
@@ -2694,10 +2698,11 @@ _write_env() {
 # Firestore security rules.
 #
 # authDomain is deliberately overridden to <pid>.web.app rather than the
-# webApps.getConfig default of <pid>.firebaseapp.com — same Hosting alias
-# the email-link callbackUri now points at (see configure_auth), so the
-# Firebase Auth SDK and the magic-link landing page share an origin and
-# stay first-party in Chrome.
+# webApps.getConfig default of <pid>.firebaseapp.com, so the Firebase Auth
+# SDK and the app's /auth/action landing page share an origin and the
+# magic-link flow completes first-party in Chrome. (The email link itself
+# still transits the default firebaseapp.com handler — see configure_auth
+# for why that's just a redirect and needs no cross-origin state.)
 _write_client_env() {
   local list_resp app_id cfg
   list_resp=$(curl -sfL \
