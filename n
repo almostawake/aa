@@ -1595,7 +1595,7 @@ fi
 # =====================================================================
 # 10. SETTING UP NEW PROJECT (intro + auth happens in row UI below)
 # =====================================================================
-# Creds live at ~/.if/creds/.env.auth.<email>.json — one file per
+# Creds live at ~/.if/creds/google.<email>.json — one file per
 # Google account, shared across every project. We never copy them into
 # project trees. cmd-auth.mjs is fetched fresh each run into ~/.if/.
 #
@@ -1614,7 +1614,7 @@ echo "setting up google hosting"
 echo ""
 
 # Fetch cmd-auth.mjs fresh — small file, idempotent. Lands at
-# ~/.if/cmd-auth.mjs; cred files land at ~/.if/creds/.env.auth.<email>.json.
+# ~/.if/cmd-auth.mjs; cred files land at ~/.if/creds/google.<email>.json.
 curl -fsSL https://raw.githubusercontent.com/almostawake/if/main/cmd-auth.mjs \
   -o "$IF_HOME/cmd-auth.mjs" >> "$INSTALL_LOG" 2>&1 \
   || die "couldn't fetch cmd-auth.mjs"
@@ -2424,7 +2424,7 @@ PROV_N=${#PROV_PENDING[@]}
 #    cred file below regardless.
 #  - Otherwise: `cmd-auth.mjs --discover` runs OAuth without naming an
 #    account up front; the email comes from userinfo and the cred lands
-#    at ~/.if/creds/.env.auth.<discovered>.json. The discovered email is
+#    at ~/.if/creds/google.<discovered>.json. The discovered email is
 #    printed to stdout, so we capture it for EMAIL.
 # Either way, the email we end up as seeds IF_DEFAULT_GOOGLE_USER.
 _prov_signin() {
@@ -2453,7 +2453,7 @@ _prov_signin() {
     [ "$rc" -ne 0 ] && return 1
     [ -z "$EMAIL" ] && return 1
   fi
-  local credfile="$IF_HOME/creds/.env.auth.${EMAIL}.json"
+  local credfile="$IF_HOME/creds/google.${EMAIL}.json"
   [ -f "$credfile" ] || return 1
   ACCESS_TOKEN=$(perl -MJSON::PP -e 'print decode_json(do { local $/; <STDIN> })->{tokens}{access_token} // ""' < "$credfile")
   [ -n "$ACCESS_TOKEN" ] || return 1
@@ -2682,7 +2682,7 @@ _clone_template() {
 # example carries each key as an empty `key=` placeholder; n fills the
 # per-project values here. .env is gitignored — local to this machine.
 # EMAIL_OF_GOOGLE_HOSTING_ACCOUNT pins the account: cmd-auth.mjs reads it
-# to know which ~/.if/creds/.env.auth.<email>.json to use, and cmd-deploy
+# to know which ~/.if/creds/google.<email>.json to use, and cmd-deploy
 # .mjs reads the same to locate the OAuth refresh token.
 _write_env() {
   local f="$PROJECT_PATH/.env"
@@ -2843,7 +2843,7 @@ _install_deps() { ( cd "$PROJECT_PATH" && npm run install:all ); }
 # `npm run deploy` invokes cmd-deploy.mjs (a thin firebase-tools
 # wrapper). It reads THIS_PROJECT_ID_ON_GOOGLE_HOSTING + EMAIL_OF_GOOGLE
 # _HOSTING_ACCOUNT from .env, synthesizes ADC creds from
-# ~/.if/creds/.env.auth.<email>.json, then shells out to firebase-tools
+# ~/.if/creds/google.<email>.json, then shells out to firebase-tools
 # (which builds via firebase.json predeploy + pushes hosting / firestore
 # rules + indexes / storage rules / functions).
 _deploy_to_fb() {
