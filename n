@@ -1386,11 +1386,25 @@ _write_zshrc() {
     printf '%s\n' '_if_path "$HOME/.if/vscode/bin"'
     printf '_if_path "%s"\n' "$jbin"
     printf '%s\n' 'unset -f _if_path'
+    printf '%s\n' '# git: macOS ships /usr/bin/git as a stub that triggers the Xcode CLT'
+    printf '%s\n' '# install dialog when invoked — real git only once CLT is present. The'
+    printf '%s\n' '# appended PATH leaves that stub ahead of if'\''s git, so when the stub is'
+    printf '%s\n' '# the active git, move if'\''s git in front of it. A real git the user'
+    printf '%s\n' '# installed (brew, CLT) is the active git already and stays untouched.'
+    printf '%s\n' 'if [ -d "$HOME/.if/git/bin" ] && [ "$(command -v git 2>/dev/null)" = /usr/bin/git ] && ! xcode-select -p >/dev/null 2>&1; then'
+    printf '%s\n' '  export PATH="$HOME/.if/git/bin:$PATH"'
+    printf '%s\n' 'fi'
     printf '%s\n' '# git plumbing — only when the if-bundled git is the active git, never'
     printf '%s\n' '# bolted onto someone else'\''s git (which the appended PATH may prefer).'
     printf '%s\n' 'if [ "$(command -v git 2>/dev/null)" = "$HOME/.if/git/bin/git" ]; then'
     printf '%s\n' '  [ -d "$HOME/.if/git/libexec/git-core" ] && export GIT_EXEC_PATH="$HOME/.if/git/libexec/git-core"'
     printf '%s\n' '  [ -d "$HOME/.if/git/lib" ] && export DYLD_FALLBACK_LIBRARY_PATH="$HOME/.if/git/lib:$HOME/lib:/usr/local/lib:/usr/lib"'
+    printf '%s\n' 'fi'
+    printf '%s\n' '# java: /usr/bin/java is likewise a stub that pops the "No Java runtime"'
+    printf '%s\n' '# install dialog until a JDK exists. When it'\''s the active java, move'
+    printf '%s\n' '# if'\''s JDK ahead of it; a JDK the user installed stays untouched.'
+    printf 'if [ -d "%s" ] && [ "$(command -v java 2>/dev/null)" = /usr/bin/java ] && ! /usr/libexec/java_home --failfast >/dev/null 2>&1; then\n' "$jbin"
+    printf '  export PATH="%s:$PATH"\n' "$jbin"
     printf '%s\n' 'fi'
     printf '%s\n' "$POST_END"
   } > "$postf"

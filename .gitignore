@@ -1,0 +1,15 @@
+# Scratch / working dir
+.tmp/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+*.swp
+
+# zshrc backups n leaves behind (.zshrc.YYYYMMDD-HHMM.bak)
+*.bak
+
+# Logs
+*.log
