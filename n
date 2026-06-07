@@ -2240,6 +2240,107 @@ grant_token_creator() {
   if [ "$set_code" != "200" ]; then return 1; fi
 }
 
+# Grant the Cloud Functions runtime service account `roles/aiplatform.user`
+# on the **project**, so it can call Vertex AI (Gemini) via ADC.
+#
+# Why: the if template's AI features call Gemini through Vertex AI —
+#   POST aiplatform.googleapis.com/v1/projects/$pid/locations/$loc/
+#        publishers/google/models/$model:generateContent
+# authenticated by the runtime SA's own ADC token (GoogleAuth with the
+# cloud-platform scope) and billed straight to Cloud Billing. No API key,
+# and none of the Gemini *Developer* API's separate prepaid-credits tier.
+# This is the same pattern sih-tenders uses. aiplatform.googleapis.com is
+# enabled by _prov_enable_vertexai; this binding gives the SA permission
+# to actually invoke it. New projects no longer auto-grant Editor to the
+# default compute SA, so the role must be asserted explicitly.
+#
+# Asserted unconditionally on every n project so the template ships ready
+# for the AI pattern even if the first feature doesn't use it yet. Cost is
+# one inert project IAM binding.
+#
+# Idempotent: reads the project policy, adds the binding only when missing,
+# writes back with the captured etag. Unlike grant_token_creator (which
+# edits the SA's *own* resource policy), this edits the project policy.
+grant_aiplatform_user() {
+  local pid="$1"
+  http_log "grant_aiplatform_user start: pid=$pid"
+
+  # Project number → runtime SA email (Compute Engine default SA, as used
+  # by Cloud Functions Gen 2 / Cloud Run).
+  local proj_tmp; proj_tmp=$(mktemp)
+  local proj_code proj_body
+  proj_code=$(curl -s -o "$proj_tmp" -w "%{http_code}" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    "https://cloudresourcemanager.googleapis.com/v1/projects/$pid")
+  proj_body=$(cat "$proj_tmp"); rm -f "$proj_tmp"
+  http_log "grant_aiplatform_user $pid lookup → HTTP $proj_code body: $(log_trunc "$proj_body")"
+  if [ "$proj_code" != "200" ]; then return 1; fi
+
+  local project_number
+  project_number=$(perl -MJSON::PP -e '
+    my $j = decode_json(join("", <STDIN>));
+    print $j->{projectNumber} if defined $j->{projectNumber};
+  ' <<< "$proj_body")
+  if [ -z "$project_number" ]; then
+    http_log "grant_aiplatform_user: no projectNumber in response"
+    return 1
+  fi
+
+  local sa="${project_number}-compute@developer.gserviceaccount.com"
+  local sa_member="serviceAccount:${sa}"
+  http_log "grant_aiplatform_user $pid sa=$sa"
+
+  # Read current project policy. requestedPolicyVersion:3 so any existing
+  # conditional bindings round-trip intact instead of being stripped.
+  local get_tmp; get_tmp=$(mktemp)
+  local get_code get_body
+  get_code=$(curl -s -o "$get_tmp" -w "%{http_code}" -X POST \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "X-Goog-User-Project: $pid" \
+    -H "Content-Type: application/json" \
+    -d '{"options":{"requestedPolicyVersion":3}}' \
+    "https://cloudresourcemanager.googleapis.com/v1/projects/$pid:getIamPolicy")
+  get_body=$(cat "$get_tmp"); rm -f "$get_tmp"
+  http_log "grant_aiplatform_user $pid getIamPolicy → HTTP $get_code body: $(log_trunc "$get_body")"
+  if [ "$get_code" != "200" ]; then return 1; fi
+
+  # Merge: add the SA → roles/aiplatform.user binding if absent, leave all
+  # other bindings and the etag/version untouched. Only matches the plain
+  # (condition-less) binding for this role, so we never piggy-back the SA
+  # onto a conditional binding of the same role.
+  local merged
+  merged=$(BODY="$get_body" MEMBER="$sa_member" perl -MJSON::PP -e '
+    my $j = decode_json($ENV{BODY});
+    my $member = $ENV{MEMBER};
+    my $role = "roles/aiplatform.user";
+    $j->{bindings} //= [];
+    my $b;
+    for my $x (@{$j->{bindings}}) {
+      if (($x->{role} // "") eq $role && !exists $x->{condition}) { $b = $x; last; }
+    }
+    if (!$b) {
+      $b = { role => $role, members => [] };
+      push @{$j->{bindings}}, $b;
+    }
+    unless (grep { $_ eq $member } @{$b->{members}}) {
+      push @{$b->{members}}, $member;
+    }
+    print encode_json({ policy => $j });
+  ') || { http_log "grant_aiplatform_user: policy merge failed"; return 1; }
+
+  local set_tmp; set_tmp=$(mktemp)
+  local set_code set_body
+  set_code=$(curl -s -o "$set_tmp" -w "%{http_code}" -X POST \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "X-Goog-User-Project: $pid" \
+    -H "Content-Type: application/json" \
+    -d "$merged" \
+    "https://cloudresourcemanager.googleapis.com/v1/projects/$pid:setIamPolicy")
+  set_body=$(cat "$set_tmp"); rm -f "$set_tmp"
+  http_log "grant_aiplatform_user $pid setIamPolicy → HTTP $set_code body: $(log_trunc "$set_body")"
+  if [ "$set_code" != "200" ]; then return 1; fi
+}
+
 # Validate a GCP project ID. Collects ALL violated rules so the user
 # sees every rule they're breaking at once, not just the first.
 VALIDATION_ERRORS=()
@@ -2324,7 +2425,7 @@ PROV_PENDING=(
   "enable artifact registry api"
   "enable cloud pub/sub api"
   "enable cloud scheduler api"
-  "enable gemini api"
+  "enable vertex ai api"
   "enable gmail api"
   "enable google calendar api"
   "enable api keys api"
@@ -2333,6 +2434,7 @@ PROV_PENDING=(
   "create storage bucket"
   "configure auth providers"
   "grant runtime sa self-impersonation"
+  "grant runtime sa vertex ai access"
 )
 PROV_RUNNING=(
   "browser sign-in"
@@ -2353,7 +2455,7 @@ PROV_RUNNING=(
   "enabling artifact registry api"
   "enabling cloud pub/sub api"
   "enabling cloud scheduler api"
-  "enabling gemini api"
+  "enabling vertex ai api"
   "enabling gmail api"
   "enabling google calendar api"
   "enabling api keys api"
@@ -2362,6 +2464,7 @@ PROV_RUNNING=(
   "creating storage bucket"
   "configuring auth providers"
   "granting runtime sa self-impersonation"
+  "granting runtime sa vertex ai access"
 )
 PROV_DONE=(
   "signed in"
@@ -2382,7 +2485,7 @@ PROV_DONE=(
   "artifact registry api enabled"
   "cloud pub/sub api enabled"
   "cloud scheduler api enabled"
-  "gemini api enabled"
+  "vertex ai api enabled"
   "gmail api enabled"
   "google calendar api enabled"
   "api keys api enabled"
@@ -2391,6 +2494,7 @@ PROV_DONE=(
   "storage bucket created"
   "auth providers configured"
   "runtime sa self-impersonation granted"
+  "runtime sa vertex ai access granted"
 )
 PROV_FNS=(
   "_prov_signin"
@@ -2411,7 +2515,7 @@ PROV_FNS=(
   "_prov_enable_artifactregistry"
   "_prov_enable_pubsub"
   "_prov_enable_cloudscheduler"
-  "_prov_enable_gemini"
+  "_prov_enable_vertexai"
   "_prov_enable_gmail"
   "_prov_enable_calendar"
   "_prov_enable_apikeys"
@@ -2420,6 +2524,7 @@ PROV_FNS=(
   "_prov_storage"
   "_prov_auth"
   "_prov_grant_token_creator"
+  "_prov_grant_aiplatform_user"
 )
 PROV_N=${#PROV_PENDING[@]}
 
@@ -2578,7 +2683,7 @@ _prov_enable_artifactregistry() { enable_api "$PID" artifactregistry.googleapis.
 _prov_enable_eventarc()         { enable_api "$PID" eventarc.googleapis.com; }
 _prov_enable_pubsub()           { enable_api "$PID" pubsub.googleapis.com; }
 _prov_enable_cloudscheduler()   { enable_api "$PID" cloudscheduler.googleapis.com; }
-_prov_enable_gemini()           { enable_api "$PID" generativelanguage.googleapis.com; }
+_prov_enable_vertexai()         { enable_api "$PID" aiplatform.googleapis.com; }
 _prov_enable_gmail()            { enable_api "$PID" gmail.googleapis.com; }
 _prov_enable_calendar()         { enable_api "$PID" calendar-json.googleapis.com; }
 _prov_enable_apikeys()          { enable_api "$PID" apikeys.googleapis.com; }
@@ -2587,6 +2692,7 @@ _prov_firestore()               { create_firestore "$PID"; }
 _prov_storage()                 { create_storage_bucket "$PID"; }
 _prov_auth()                    { configure_auth "$PID"; }
 _prov_grant_token_creator()     { grant_token_creator "$PID"; }
+_prov_grant_aiplatform_user()   { grant_aiplatform_user "$PID"; }
 
 draw_prov_row() {
   local i="$1" state="$2"
