@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>impatient futurist</title>
+    <title>Andrew Walker</title>
     <style>
       @font-face {
         font-family: "JetBrains Mono";
@@ -182,291 +182,29 @@
         border-top: 1px solid var(--border);
         padding-top: 1.5em;
       }
+      /* landing: centered headshot only */
+      body {
+        max-width: none;
+        margin: 0;
+        padding: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .headshot {
+        display: block;
+        height: 160px;
+        width: auto;
+      }
+      @media (max-width: 600px) {
+        .headshot {
+          height: 130px;
+        }
+      }
     </style>
   </head>
   <body>
-    <!-- prettier-ignore -->
-    <div class="banner">┌─────────────────────────────────────┐
-│     <b>welcome, impatient futurist</b>     │
-└─────────────────────────────────────┘</div>
-
-    <p>
-      we are a community of non-developers building personal automation
-      <b>solutions</b> using claude code (paid) in the evenings and on weekends
-      around our work commitments
-    </p>
-    <p>
-      you're in the right place if you've done the math on where your corporate
-      job will be in five years - and you'd rather build your ai skills and a
-      small side hustle now, while you've still got a steady paycheck
-    </p>
-
-    <h1>we help in 3 ways:</h1>
-    <ol>
-      <li>
-        <b>slingshot start</b> .. the biggest barrier to ai-assisted automation
-        is setup. we automate your one-time and per-project setups in line with
-        the philosophy described below. we pre-choose technologies, provision
-        cloud hosting (using your gmail free credits) and copy a template app.
-        we even deploy it for you, so you don't have to fumble around in the
-        dark
-      </li>
-      <li>
-        <b>ai guiderails</b> .. claude will deliver way better outcomes because
-        we provide a bunch of common preset code templates for claude to build
-        the things you need to do most often - plus we give claude specific
-        guidance on what to do (and what not to do)
-      </li>
-      <li>
-        <b>camaraderie</b> .. being amongst like-minded builders who love
-        solving real-world problems with tech solutions means you're no longer
-        alone - and we offer in-person training courses (ah, the irony) if you
-        want an initial boost
-      </li>
-    </ol>
-
-    <h1>our security philosophy</h1>
-
-    <p>
-      <em
-        >andrew trusts anthropic's "public benefit corporation" status, but he
-        understands that most people feel uneasy about ai security in
-        general</em
-      >
-    </p>
-    <p>
-      the best results for building with claude's assistance come from working
-      in "yolo" mode, where it has the "god" privileges to consider and do more
-      things on our behalf
-    </p>
-    <p>
-      the catch: claude could damage our junk, deliberately or otherwise
-    </p>
-    <p>
-      luckily there's a fix - keep our personal stuff totally separate from the
-      ai sandbox. pretty simple, if we:
-    </p>
-
-    <ul>
-      <li>
-        create a <b>dedicated gmail account</b> for your initial learning
-        journey with claude. this avoids the gnarly worry when you want to give
-        your app access to a calendar or gmail but feel uncomfortable giving
-        carte-blanche to your personal data. this way claude has (and you have)
-        free rein in an empty account
-      </li>
-      <li>
-        create a <b>dedicated mac user</b> (without admin rights) on your local
-        machine, so claude can't see any of your personal data. nothing claude
-        or your apps do can leak out of the sandbox or touch the rest of your
-        machine
-      </li>
-    </ul>
-
-    <h1>you'll need a mac</h1>
-
-    <p>
-      sorry. if you only have windows at home then you'll need to consider a
-      second hand mac (apple silicon). the good news is you will be fine with
-      low spec. andrew uses a 2023 macbook air M2 with 16gb ram and it's never
-      been slow
-    </p>
-
-    <h1>before you start</h1>
-
-    <p>important .. <b>the setup script relies on these dependencies</b></p>
-
-    <p>
-      it's best to load this page into incognito before you start.<br />
-      open links from there, it saves multi-gmail-account pain
-    </p>
-
-    <ol>
-      <li>
-        <b>sign up for a new gmail account</b>
-        <ul>
-          <li>important .. <b>don't reuse your personal account</b></li>
-          <li>
-            you'll feel less restricted to play with automations around email
-            and calendars in particular, if it's a dedicated, separate account
-          </li>
-          <li>
-            plus - you'll get <b>new</b> ~ AUD $400 free credits for google
-            cloud<br />
-            .. not that you'll need them
-          </li>
-          <li>
-            google limits how many accounts you can create per phone number, so
-            if it refuses yours, just borrow a friend's - it's only used for
-            one-time signup, not future auth. or grab a one-time $15 sim if
-            you'd rather not ask
-          </li>
-        </ul>
-      </li>
-      <li>
-        <b>accept google cloud terms &amp; activate free trial</b><br />
-        <p>
-          <em>
-            if you have opted to re-use an old gmail account, you'll have to
-            muddle through the process of accepting terms and enabling billing
-            in google cloud <b>instead of these steps</b>. don't worry, you're
-            not going to be incurring significant costs if you stick to the
-            "personal automations" brief
-          </em>
-        </p>
-        <ul>
-          <li>use an incognito window with no google accounts signed in</li>
-          <li>
-            go here:
-            <a href="https://console.cloud.google.com" target="_blank"
-              >console.cloud.google.com</a
-            >
-          </li>
-          <li>set up 2fa if prompted</li>
-          <li>accept terms</li>
-          <li>
-            fill in contact &amp; payment method<br />
-            .. credit card isn't auto-charged post trial
-          </li>
-          <li>"start free"</li>
-          <li>
-            "close" on the welcome prompt - and you're done<br />
-            .. leave the window open for your next step
-          </li>
-        </ul>
-      </li>
-      <li>
-        <b>accept firebase terms</b>
-        <ul>
-          <li>use the same incognito window from above</li>
-          <li>
-            go here:
-            <a href="https://console.firebase.google.com" target="_blank"
-              >console.firebase.google.com</a
-            >
-          </li>
-          <li>get started / create new</li>
-          <li>accept terms</li>
-          <li>call it anything you want, we'll be deleting it in a sec</li>
-          <li>
-            leave all switches/choices off (dev program, gemini, analytics)
-          </li>
-          <li>
-            when that's done delete the project<br />
-            (top-left) <code>settings -&gt; general -&gt; delete project</code>
-            (bottom)
-          </li>
-        </ul>
-      </li>
-      <li>
-        <b>on your mac create a new (standard) user called "if"</b>
-        <ul>
-          <li>important .. <b>later setup won't work without this</b></li>
-          <li>
-            <code>system settings -&gt; users &amp; groups -&gt; add user</code>
-          </li>
-          <li>type: <code>standard</code>, account name: <code>if</code></li>
-          <li>
-            optional:
-            <code>system settings -&gt; menu bar -&gt; fast user switching</code
-            ><br />
-            .. make it easy to swap back/forth
-          </li>
-          <li>
-            then switch to the new users<br />
-            .. skip all the first-time stuff, leave siri, icloud etc off<br />
-            .. open this page again once you're there
-          </li>
-          <li>optional: set fast user switching again, reverse direction</li>
-          <li>
-            <em>resist tweaking/installing stuff until after setup runs</em>
-          </li>
-        </ul>
-      </li>
-    </ol>
-
-    <h1>let's go!</h1>
-
-    <p>logged into the new "if" user on your mac:</p>
-    <ul>
-      <li><code>applications -&gt; utilities -&gt; terminal</code></li>
-      <li>
-        for the next step, make sure the terminal is visible at all times,
-        especially when chrome pops up to authenticate you. otherwise you'll
-        wonder why it's stopped (it waits for input after you log into your
-        gmail account)
-      </li>
-      <li>
-        copy/paste:
-        <code>curl -fsSL https://almostawake.com/n | bash</code>
-        <button
-          class="copy-btn"
-          data-copy="curl -fsSL https://almostawake.com/n | bash"
-        >
-          copy
-        </button>
-        <br />
-        .. hit return. you're on your way
-      </li>
-    </ul>
-
-    <p>
-      if you freak out at any point, just quit the terminal app, swap back to
-      your main mac user and delete the "if" user .. no harm done. you can
-      always re-create it another time when you're feeling brave ;)
-    </p>
-
-    <h1>what now?</h1>
-
-    <!-- prettier-ignore -->
-    <pre class="ascii-art">
-┌─────────────────────┐
-│                     │
-│     coming soon     │
-│                     │
-└──────────┬──────────┘
-           │
-           │
-           │
-           │
-───────────┴───────────</pre>
-
-    <p>
-      we're putting together the next steps. check back soon, or drop andrew a
-      line below if you want to be pinged when there's more
-    </p>
-
-    <p class="footer">
-      questions?
-      <a href="mailto:andrew@almostawake.com">andrew@almostawake.com</a>
-    </p>
-
-    <script>
-      var banners = document.querySelectorAll(".banner");
-      var onScroll = function () {
-        banners.forEach(function (b) {
-          b.classList.toggle("scrolled", window.scrollY > 4);
-        });
-      };
-      window.addEventListener("scroll", onScroll, { passive: true });
-      onScroll();
-
-      document.querySelectorAll(".copy-btn").forEach(function (btn) {
-        btn.addEventListener("click", async function () {
-          try {
-            await navigator.clipboard.writeText(btn.dataset.copy);
-            var orig = btn.textContent.trim();
-            btn.textContent = "copied!";
-            btn.classList.add("copied");
-            setTimeout(function () {
-              btn.textContent = orig;
-              btn.classList.remove("copied");
-            }, 1500);
-          } catch (e) {
-            console.error(e);
-          }
-        });
-      });
-    </script>
+    <img class="headshot" src="img/andrew.png" alt="Andrew Walker" />
   </body>
 </html>
